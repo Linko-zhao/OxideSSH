@@ -228,6 +228,7 @@ pub struct AppView {
     scroll_accumulator: f32,
     bell: bool,
     status_message: Option<MessageId>,
+    status_rendered: Option<MessageId>,
     terminal_geometry: Option<TerminalGeometry>,
     terminal_selecting: bool,
     quitting: bool,
@@ -311,6 +312,7 @@ impl AppView {
             scroll_accumulator: 0.0,
             bell: false,
             status_message,
+            status_rendered: None,
             terminal_geometry: None,
             terminal_selecting: false,
             quitting: false,
@@ -1326,6 +1328,34 @@ impl AppView {
             tab.terminal_mut().scroll_display(lines);
             cx.notify();
         }
+    }
+
+    fn dismiss_status(&mut self, cx: &mut Context<Self>) {
+        self.status_message = None;
+        cx.notify();
+    }
+
+    fn sync_status(&mut self, cx: &mut Context<Self>) {
+        if self.status_message == self.status_rendered {
+            return;
+        }
+        self.status_rendered = self.status_message;
+        let Some(message) = self.status_message else {
+            return;
+        };
+        // Transient banner: clear it automatically unless a newer message
+        // replaced it in the meantime.
+        cx.spawn(async move |weak, cx| {
+            cx.background_executor().timer(STATUS_TIMEOUT).await;
+            weak.update(cx, |this, cx| {
+                if this.status_message == Some(message) {
+                    this.status_message = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn render_recovery(&self, tokens: ThemeTokens, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -2910,6 +2940,7 @@ impl Render for AppView {
         self.refresh_preferences(window);
         self.update_text_fields(cx);
         self.sync_modal_focus(window, cx);
+        self.sync_status(cx);
         let tokens = self.tokens();
         let body = if self.state.is_none() {
             self.render_recovery(tokens, cx)
@@ -2935,7 +2966,27 @@ impl Render for AppView {
                 .rounded(px(6.))
                 .bg(rgb(tokens.danger))
                 .text_color(rgb(0xffffff))
-                .child(self.text(message))
+                .flex()
+                .items_center()
+                .gap(px(10.))
+                .child(div().flex_1().child(self.text(message)))
+                .child(
+                    div()
+                        .id("dismiss-status")
+                        .cursor_pointer()
+                        .tab_stop(true)
+                        .focus(|element| element.bg(rgb(tokens.surface)))
+                        .text_color(rgb(0xffffff))
+                        .px(px(6.))
+                        .child("×")
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_status(cx)))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if activation_key(event) {
+                                this.dismiss_status(cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                )
         });
         let bell = self.bell.then(|| {
             div()
@@ -3090,6 +3141,7 @@ impl Drop for AppView {
 }
 
 const OUTPUT_COALESCE_BYTES: usize = 64 * 1024;
+const STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 fn system_locale() -> Option<String> {
     sys_locale::get_locale()
