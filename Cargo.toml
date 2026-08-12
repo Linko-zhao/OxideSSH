@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/oxide-ssh-core",
+    "crates/oxide-ssh-terminal",
+    "crates/oxide-ssh-desktop",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+license = "MIT"
+authors = ["Linko zhao"]
+repository = "https://github.com/linko-zhao/OxideSSH"
+
+[workspace.dependencies]
+alacritty_terminal = { version = "=0.26.0", default-features = false }
+async-channel = "=2.5.0"
+bytes = "1.10"
+directories = "6.0"
+futures = "0.3"
+gpui = "=0.2.2"
+keyring = { version = "=4.1.6", features = ["v1"] }
+oxide-ssh-core = { path = "crates/oxide-ssh-core" }
+oxide-ssh-terminal = { path = "crates/oxide-ssh-terminal" }
+pageant = "=0.2.1"
+parking_lot = "0.12"
+russh = { version = "=0.62.5", default-features = false, features = ["ring", "rsa"] }
+rand = "0.10"
+secrecy = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+smallvec = "=1.15.2"
+tempfile = "3.20"
+sys-locale = "=0.3.2"
+thiserror = "2.0"
+tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "time", "sync", "io-util"] }
+tokio-util = { version = "=0.7.19", features = ["rt"] }
+unicode-segmentation = "1.13"
+uuid = { version = "1.18", features = ["serde", "v4"] }

@@ -1,0 +1,75 @@
+name: Package unsigned releases
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: 1.97.1
+  CARGO_PACKAGER_VERSION: 0.11.8
+
+jobs:
+  package:
+    name: Package (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            formats: wix
+            artifact_name: OxideSSH-windows-x86_64-unsigned
+            artifact_paths: |
+              target/package/**/*.msi
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            formats: app,dmg
+            artifact_name: OxideSSH-macos-aarch64-unsigned
+            artifact_paths: |
+              target/package/**/*.app/**
+              target/package/**/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal --target ${{ matrix.target }}
+
+      - name: Select Rust toolchain
+        run: rustup default ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+        with:
+          shared-key: package-${{ matrix.target }}
+          cache-on-failure: false
+
+      - name: Build desktop release
+        run: cargo build -p oxide-ssh-desktop --release --target ${{ matrix.target }} --locked
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version ${{ env.CARGO_PACKAGER_VERSION }} --locked
+
+      - name: Create unsigned packages
+        run: cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+
+      - name: Upload unsigned packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_paths }}
+          if-no-files-found: error
+          retention-days: 14

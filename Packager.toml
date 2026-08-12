@@ -1,0 +1,24 @@
+[package]
+product_name = "OxideSSH"
+version = "0.1.0"
+identifier = "io.github.linko-zhao.OxideSSH"
+description = "A desktop SSH terminal for personal developers"
+homepage = "https://github.com/linko-zhao/OxideSSH"
+authors = ["Linko zhao"]
+publisher = "Linko zhao"
+license_file = "LICENSE"
+copyright = "Copyright © 2026 Linko zhao"
+formats = ["app", "dmg", "wix"]
+icons = [
+    "assets/oxide-ssh.png",
+    "assets/oxide-ssh.ico",
+    "assets/oxide-ssh.icns",
+]
+binaries = [{ path = "oxide-ssh", main = true }]
+out_dir = "target/package"
+
+[package.macos]
+minimum_system_version = "14.0"
+
+[package.wix]
+languages = ["en-US"]

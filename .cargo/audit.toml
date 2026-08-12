@@ -1,0 +1,39 @@
+# Dependency audit overrides, each with an evidence-backed justification.
+#
+# OxideSSH pins gpui =0.2.2 and russh =0.62.5 (project plan). The advisories
+# below all name crates pinned by those exact versions; no patched release can
+# be selected without forking the pinned upstream crates.
+[advisories]
+ignore = [
+    # rsa 0.10.0-rc.18 (Marvin Attack, RUSTSEC-2023-0071): russh 0.62.5 pins
+    # rsa to exactly 0.10.0-rc.18, so the patched 0.10.0 release cannot be
+    # selected. The advisory targets RSA *decryption* of attacker-chosen
+    # ciphertexts; OxideSSH uses rsa only through ssh-key for SSH client
+    # signature generation and verification — no RSA decryption path exists in
+    # russh/ssh-key 0.62/0.7.
+    "RUSTSEC-2023-0071",
+    # async-std 1.13.2 (RUSTSEC-2025-0052): transitive via gpui 0.2.2's
+    # gpui_http_client (zed-async-tar). Unmaintained notice only; no
+    # vulnerability; no replacement selectable while gpui is pinned.
+    "RUSTSEC-2025-0052",
+    # instant 0.1.13 (RUSTSEC-2024-0384): transitive via gpui's cosmic-text.
+    # Unmaintained notice only; no vulnerability.
+    "RUSTSEC-2024-0384",
+    # paste 1.0.15 (RUSTSEC-2024-0436): transitive proc macro. Unmaintained
+    # notice only; no vulnerability.
+    "RUSTSEC-2024-0436",
+    # proc-macro-error2 2.0.1 (RUSTSEC-2026-0173): transitive proc macro.
+    # Unmaintained notice only; no vulnerability.
+    "RUSTSEC-2026-0173",
+    # rustls-pemfile 2.2.0 (RUSTSEC-2025-0134): transitive via gpui's
+    # gpui_http_client (zed-reqwest). Unmaintained notice only; no
+    # vulnerability; the 1.x line is maintained but 2.x is pinned upstream.
+    "RUSTSEC-2025-0134",
+    # rustybuzz 0.14.1 and 0.20.1 (RUSTSEC-2026-0206): transitive via gpui's
+    # cosmic-text and usvg. Unmaintained notice only; no vulnerability.
+    "RUSTSEC-2026-0206",
+    # ttf-parser 0.25.1 (RUSTSEC-2026-0192): transitive via gpui's usvg/resvg
+    # (SVG icons). Unmaintained notice only; no vulnerability; OxideSSH never
+    # loads untrusted SVG documents.
+    "RUSTSEC-2026-0192",
+]

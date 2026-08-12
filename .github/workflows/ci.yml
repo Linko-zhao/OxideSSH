@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: 1.97.1
+  CARGO_PACKAGER_VERSION: 0.11.8
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            formats: wix
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            formats: app,dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal --component rustfmt,clippy --target ${{ matrix.target }}
+
+      - name: Select Rust toolchain
+        run: rustup default ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@bc2d2e71bd35c5549942babaa51a89c586b981d1 # v2.8.1
+        with:
+          shared-key: desktop-${{ matrix.target }}
+          cache-on-failure: false
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace --all-targets --locked
+
+      - name: Build desktop release
+        run: cargo build -p oxide-ssh-desktop --release --target ${{ matrix.target }} --locked
+
+      - name: Install cargo-packager
+        run: cargo install cargo-packager --version ${{ env.CARGO_PACKAGER_VERSION }} --locked
+
+      - name: Smoke-test unsigned package creation
+        run: cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+
+      - name: Install iOS target
+        if: runner.os == 'macOS'
+        run: rustup target add aarch64-apple-ios --toolchain ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Check portable crates for iOS
+        if: runner.os == 'macOS'
+        run: cargo check -p oxide-ssh-core -p oxide-ssh-terminal --target aarch64-apple-ios --locked
+
+  security-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Audit Cargo.lock
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,32 @@
+[package]
+name = "oxide-ssh-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+default-run = "oxide-ssh"
+
+[[bin]]
+name = "oxide-ssh"
+path = "src/main.rs"
+
+[dependencies]
+alacritty_terminal.workspace = true
+async-channel.workspace = true
+bytes.workspace = true
+directories.workspace = true
+gpui.workspace = true
+keyring.workspace = true
+oxide-ssh-core.workspace = true
+oxide-ssh-terminal.workspace = true
+parking_lot.workspace = true
+secrecy.workspace = true
+sys-locale.workspace = true
+uuid.workspace = true
+unicode-segmentation.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
