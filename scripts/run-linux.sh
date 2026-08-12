@@ -11,9 +11,11 @@
 #      library into the cache as an unversioned symlink.
 #   3. No Secret Service provider (gnome-keyring) is installed or running, so
 #      the OS credential store ("Remember password") cannot be used. The
-#      script extracts gnome-keyring, starts a single daemon, and creates or
-#      unlocks the default keyring with a password you provide. The password
-#      is never empty and is only used to unlock the keyring for this shell.
+#      script extracts gnome-keyring, prompts for a non-empty password, and
+#      starts a single daemon with the default keyring created or unlocked.
+#      The daemon keeps the keyring unlocked in memory for its lifetime;
+#      later launches reuse a running daemon as-is (its unlock state is not
+#      probed) and otherwise prompt again.
 #   4. WSLg's Wayland compositor predates the xdg_wm_base version GPUI 0.2.2
 #      requires (panic: UnsupportedVersion). WSLg's Xwayland serves :0 and
 #      works, so the Wayland backend is disabled for this launch.
