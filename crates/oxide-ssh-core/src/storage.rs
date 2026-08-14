@@ -1,10 +1,13 @@
 use std::{
     collections::HashSet,
-    fs::{self, File},
+    fs,
     io::{self, Write},
     net::IpAddr,
     path::{Path, PathBuf},
 };
+
+#[cfg(unix)]
+use std::fs::File;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

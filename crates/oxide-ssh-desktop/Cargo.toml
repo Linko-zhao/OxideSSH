@@ -28,5 +28,11 @@ uuid.workspace = true
 unicode-segmentation.workspace = true
 thiserror.workspace = true
 
+[package.metadata.packager]
+product-name = "OxideSSH"
+identifier = "io.github.linko-zhao.oxide-ssh"
+publisher = "Linko zhao"
+out-dir = "../../target/package"
+
 [dev-dependencies]
 tempfile.workspace = true
