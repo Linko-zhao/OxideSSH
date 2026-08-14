@@ -1439,9 +1439,13 @@ mod tests {
         let file_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
         #[cfg(unix)]
         let agent_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
-        let mut accepted_keys = vec![file_key.public_key().clone()];
         #[cfg(unix)]
-        accepted_keys.push(agent_key.public_key().clone());
+        let accepted_keys = vec![
+            file_key.public_key().clone(),
+            agent_key.public_key().clone(),
+        ];
+        #[cfg(not(unix))]
+        let accepted_keys = vec![file_key.public_key().clone()];
         let accepted_keys = Arc::new(accepted_keys);
         let encrypted = file_key
             .encrypt(&mut rand::rng(), "oxide-key-test")
