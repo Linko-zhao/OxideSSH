@@ -1422,6 +1422,7 @@ mod tests {
         _directory: TempDir,
         port: u16,
         key_path: PathBuf,
+        #[cfg(unix)]
         agent_key: PrivateKey,
         resize_events: Receiver<TerminalSize>,
         server_task: tokio::task::JoinHandle<()>,
@@ -1436,11 +1437,12 @@ mod tests {
     async fn start_ssh_fixture() -> SshFixture {
         let directory = tempdir().unwrap();
         let file_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
+        #[cfg(unix)]
         let agent_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).unwrap();
-        let accepted_keys = Arc::new(vec![
-            file_key.public_key().clone(),
-            agent_key.public_key().clone(),
-        ]);
+        let mut accepted_keys = vec![file_key.public_key().clone()];
+        #[cfg(unix)]
+        accepted_keys.push(agent_key.public_key().clone());
+        let accepted_keys = Arc::new(accepted_keys);
         let encrypted = file_key
             .encrypt(&mut rand::rng(), "oxide-key-test")
             .unwrap();
@@ -1476,6 +1478,7 @@ mod tests {
             _directory: directory,
             port,
             key_path,
+            #[cfg(unix)]
             agent_key,
             resize_events,
             server_task,
