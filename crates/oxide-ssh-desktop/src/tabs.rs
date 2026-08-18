@@ -340,6 +340,7 @@ pub enum ModalRequest {
     },
     ChangedHostKey {
         tab_id: TabId,
+        request_id: Uuid,
         endpoint: Endpoint,
         expected_sha256: String,
         presented_sha256: String,
@@ -360,6 +361,40 @@ impl ModalRequest {
             | Self::Secret { tab_id }
             | Self::ConfirmClose { tab_id } => *tab_id,
         }
+    }
+
+    pub(crate) fn is_secret_for(&self, expected_tab_id: TabId) -> bool {
+        matches!(self, Self::Secret { tab_id } if *tab_id == expected_tab_id)
+    }
+
+    pub(crate) fn is_confirm_close_for(&self, expected_tab_id: TabId) -> bool {
+        matches!(self, Self::ConfirmClose { tab_id } if *tab_id == expected_tab_id)
+    }
+
+    pub(crate) fn is_host_key_for(&self, expected_tab_id: TabId, expected_prompt_id: Uuid) -> bool {
+        matches!(
+            self,
+            Self::HostKey {
+                tab_id,
+                prompt_id,
+                ..
+            } if *tab_id == expected_tab_id && *prompt_id == expected_prompt_id
+        )
+    }
+
+    pub(crate) fn is_changed_host_key_for(
+        &self,
+        expected_tab_id: TabId,
+        expected_request_id: Uuid,
+    ) -> bool {
+        matches!(
+            self,
+            Self::ChangedHostKey {
+                tab_id,
+                request_id,
+                ..
+            } if *tab_id == expected_tab_id && *request_id == expected_request_id
+        )
     }
 }
 
@@ -403,6 +438,20 @@ impl ModalQueue {
 
     pub fn complete_current(&mut self) -> Option<ModalRequest> {
         self.requests.pop_front()
+    }
+
+    /// Removes the FIFO head only when it belongs to the callback currently
+    /// being handled. A stale callback therefore cannot consume another
+    /// request's prompt.
+    pub(crate) fn complete_current_if(
+        &mut self,
+        matches_current: impl FnOnce(&ModalRequest) -> bool,
+    ) -> Option<ModalRequest> {
+        self.requests
+            .front()
+            .is_some_and(matches_current)
+            .then(|| self.requests.pop_front())
+            .flatten()
     }
 
     pub fn remove_tab(&mut self, tab_id: TabId) -> Vec<ModalRequest> {
@@ -497,6 +546,7 @@ impl TabCollection {
                 presented_sha256,
             } => self.modals.push(ModalRequest::ChangedHostKey {
                 tab_id: id,
+                request_id: Uuid::new_v4(),
                 endpoint: endpoint.clone(),
                 expected_sha256: expected_sha256.clone(),
                 presented_sha256: presented_sha256.clone(),
@@ -709,6 +759,35 @@ mod tests {
     }
 
     #[test]
+    fn changed_host_key_requests_receive_distinct_identities() {
+        let mut tabs = TabCollection::new();
+        let first = tabs.open(profile(), size(), TerminalColors::default(), false);
+        let second = tabs.open(profile(), size(), TerminalColors::default(), false);
+        let event = |port| SessionEvent::ChangedHostKey {
+            endpoint: Endpoint {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            expected_sha256: "SHA256:old".into(),
+            presented_sha256: "SHA256:new".into(),
+        };
+
+        tabs.apply_event(first, event(22));
+        tabs.apply_event(second, event(23));
+
+        let first_id = match tabs.modals().current() {
+            Some(ModalRequest::ChangedHostKey { request_id, .. }) => *request_id,
+            request => panic!("expected changed-host-key request, got {request:?}"),
+        };
+        tabs.modals_mut().complete_current();
+        let second_id = match tabs.modals().current() {
+            Some(ModalRequest::ChangedHostKey { request_id, .. }) => *request_id,
+            request => panic!("expected changed-host-key request, got {request:?}"),
+        };
+        assert_ne!(first_id, second_id);
+    }
+
+    #[test]
     fn modal_queue_is_fifo_and_closing_tab_removes_its_requests() {
         let mut queue = ModalQueue::new();
         let first = TabId::new();
@@ -722,6 +801,112 @@ mod tests {
         assert_eq!(removed.len(), 2);
         assert_eq!(queue.current().unwrap().tab_id(), second);
         assert!(queue.complete_current().is_some());
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn guarded_secret_completion_preserves_an_unrelated_head() {
+        let mut queue = ModalQueue::new();
+        let first = TabId::new();
+        let second = TabId::new();
+        queue.push(ModalRequest::Secret { tab_id: first });
+        queue.push(ModalRequest::Secret { tab_id: second });
+
+        assert!(
+            queue
+                .complete_current_if(|request| request.is_secret_for(second))
+                .is_none()
+        );
+        assert!(matches!(
+            queue.current(),
+            Some(ModalRequest::Secret { tab_id }) if *tab_id == first
+        ));
+        assert!(
+            queue
+                .complete_current_if(|request| request.is_secret_for(first))
+                .is_some()
+        );
+        assert!(matches!(
+            queue.current(),
+            Some(ModalRequest::Secret { tab_id }) if *tab_id == second
+        ));
+    }
+
+    #[test]
+    fn guarded_confirm_close_completion_requires_the_matching_tab() {
+        let mut queue = ModalQueue::new();
+        let first = TabId::new();
+        let second = TabId::new();
+        queue.push(ModalRequest::ConfirmClose { tab_id: first });
+
+        assert!(
+            queue
+                .complete_current_if(|request| request.is_confirm_close_for(second))
+                .is_none()
+        );
+        assert!(
+            queue
+                .complete_current_if(|request| request.is_confirm_close_for(first))
+                .is_some()
+        );
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn guarded_host_key_completion_requires_the_matching_prompt() {
+        let mut queue = ModalQueue::new();
+        let tab_id = TabId::new();
+        let prompt_id = uuid::Uuid::new_v4();
+        queue.push(ModalRequest::HostKey {
+            tab_id,
+            prompt_id,
+            endpoint: Endpoint {
+                host: "127.0.0.1".into(),
+                port: 22,
+            },
+            algorithm: "ssh-ed25519".into(),
+            fingerprint_sha256: "SHA256:test".into(),
+        });
+
+        assert!(queue
+            .complete_current_if(|request| request.is_host_key_for(tab_id, uuid::Uuid::new_v4()))
+            .is_none());
+        assert!(
+            queue
+                .complete_current_if(|request| request.is_host_key_for(tab_id, prompt_id))
+                .is_some()
+        );
+        assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn guarded_changed_host_key_completion_requires_the_matching_request() {
+        let mut queue = ModalQueue::new();
+        let tab_id = TabId::new();
+        let request_id = uuid::Uuid::new_v4();
+        queue.push(ModalRequest::ChangedHostKey {
+            tab_id,
+            request_id,
+            endpoint: Endpoint {
+                host: "127.0.0.1".into(),
+                port: 22,
+            },
+            expected_sha256: "SHA256:old".into(),
+            presented_sha256: "SHA256:new".into(),
+        });
+
+        assert!(
+            queue
+                .complete_current_if(|request| {
+                    request.is_changed_host_key_for(tab_id, uuid::Uuid::new_v4())
+                })
+                .is_none()
+        );
+        assert!(
+            queue
+                .complete_current_if(|request| request.is_changed_host_key_for(tab_id, request_id))
+                .is_some()
+        );
         assert!(queue.is_empty());
     }
 

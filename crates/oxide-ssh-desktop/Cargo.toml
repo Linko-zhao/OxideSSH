@@ -18,6 +18,8 @@ async-channel.workspace = true
 bytes.workspace = true
 directories.workspace = true
 gpui.workspace = true
+gpui-component.workspace = true
+gpui-component-assets.workspace = true
 keyring.workspace = true
 oxide-ssh-core.workspace = true
 oxide-ssh-terminal.workspace = true
@@ -25,7 +27,6 @@ parking_lot.workspace = true
 secrecy.workspace = true
 sys-locale.workspace = true
 uuid.workspace = true
-unicode-segmentation.workspace = true
 thiserror.workspace = true
 
 [package.metadata.packager]

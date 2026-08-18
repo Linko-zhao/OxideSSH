@@ -1,12 +1,25 @@
-use std::{collections::HashMap, path::PathBuf, rc::Rc, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use gpui::{
-    App, Bounds, ClickEvent, ClipboardItem, Context, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, InspectorElementId,
-    KeyBinding, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PaintQuad, Pixels, Point, Render, ScrollWheelEvent, ShapedLine, SharedString,
-    StrikethroughStyle, Style, TextRun, UnderlineStyle, Window, WindowAppearance, actions, div,
-    fill, point, prelude::*, px, relative, rgb, size,
+    App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler, Entity,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, InspectorElementId, KeyBinding,
+    KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    Pixels, Point, Render, ScrollWheelEvent, ShapedLine, SharedString, StrikethroughStyle, Style,
+    TextRun, UnderlineStyle, WeakEntity, Window, WindowAppearance, actions, div, fill, point,
+    prelude::*, px, relative, rgb, size,
+};
+use gpui_component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Root, Theme, ThemeMode, WindowExt as _,
+    alert::Alert,
+    button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
+    form::{field, v_form},
+    group_box::GroupBox,
+    h_flex,
+    input::{Input, InputState},
+    list::ListItem,
+    radio::{Radio, RadioGroup},
+    tab::{Tab, TabBar},
 };
 use oxide_ssh_core::{
     credentials::{CredentialError, CredentialStore},
@@ -21,11 +34,10 @@ use oxide_ssh_core::{
 };
 use oxide_ssh_terminal::{CellRenderStyle, CellSide, Key, KeyInput, TerminalSize};
 use secrecy::SecretString;
+use uuid::Uuid;
 
 use crate::{
-    app_state::{
-        AppLoadOutcome, AppState, AuthMethod, ConnectionForm, FormError, ResolvedTheme, ThemeTokens,
-    },
+    app_state::{AppLoadOutcome, AppState, AuthMethod, ConnectionForm, FormError, ResolvedTheme},
     credentials::{
         CredentialTransactionError, ProfileCredentialCoordinator, SystemCredentialStore,
         credential_error_message_id,
@@ -35,7 +47,6 @@ use crate::{
         DisconnectReason, ModalRequest, TabCollection, TabId, TabLocalError, TabNotification,
         TabState,
     },
-    text_field::{TextField, TextFieldAppearance},
 };
 
 actions!(
@@ -48,10 +59,10 @@ actions!(
         CloseTab,
         Copy,
         Paste,
-        FocusNext,
-        FocusPrev,
         TerminalTab,
         TerminalShiftTab,
+        DialogFocusNext,
+        DialogFocusPrev,
     ]
 );
 
@@ -63,12 +74,15 @@ const TERMINAL_FONT: &str = "Cascadia Mono";
 const TERMINAL_FONT: &str = "monospace";
 
 pub fn init(cx: &mut App) {
-    crate::text_field::init(cx);
     let mut bindings = vec![
-        KeyBinding::new("tab", FocusNext, Some("OxideSSH")),
-        KeyBinding::new("shift-tab", FocusPrev, Some("OxideSSH")),
         KeyBinding::new("tab", TerminalTab, Some("Terminal")),
         KeyBinding::new("shift-tab", TerminalShiftTab, Some("Terminal")),
+        // Registered after gpui_component::init so these override the Input
+        // bindings only inside dialogs (deepest-context precedence).
+        KeyBinding::new("tab", DialogFocusNext, Some("OxideSSHDialog")),
+        KeyBinding::new("shift-tab", DialogFocusPrev, Some("OxideSSHDialog")),
+        KeyBinding::new("tab", DialogFocusNext, Some("OxideSSHDialog > Input")),
+        KeyBinding::new("shift-tab", DialogFocusPrev, Some("OxideSSHDialog > Input")),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
     ];
@@ -103,7 +117,7 @@ enum MainView {
     Settings,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ConfirmAction {
     DeleteProfile(ProfileId),
     DeleteHost(Endpoint),
@@ -119,17 +133,145 @@ struct TerminalGeometry {
     rows: usize,
 }
 
-type SettingListener = Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
-type SharedSettingListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct EditorId(Uuid);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EditorSaveState {
+    Idle,
+    SavingThis,
+    BlockedByOther,
+}
+
+fn editor_save_state(saving: Option<EditorId>, editor_id: EditorId) -> EditorSaveState {
+    match saving {
+        None => EditorSaveState::Idle,
+        Some(id) if id == editor_id => EditorSaveState::SavingThis,
+        Some(_) => EditorSaveState::BlockedByOther,
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DialogIdentity {
+    locale: ResolvedLocale,
+    kind: DialogIdentityKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum DialogIdentityKind {
+    Editor {
+        editor_id: EditorId,
+        auth_method: AuthMethod,
+        remember: bool,
+        save_state: EditorSaveState,
+        is_editing: bool,
+    },
+    Confirm(ConfirmAction),
+    Secret(TabId),
+    HostKey {
+        tab_id: TabId,
+        prompt_id: Uuid,
+    },
+    ChangedHostKey {
+        tab_id: TabId,
+        request_id: Uuid,
+    },
+    ConfirmClose(TabId),
+}
+
+/// Stable logical identity used to decide whether a deferred focus pass is
+/// still current; excludes locale and editor view-state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DialogFocusIdentity {
+    Editor(EditorId),
+    Confirm(ConfirmAction),
+    Secret(TabId),
+    HostKey { tab_id: TabId, prompt_id: Uuid },
+    ChangedHostKey { tab_id: TabId, request_id: Uuid },
+    ConfirmClose(TabId),
+}
+
+impl DialogIdentityKind {
+    fn focus_identity(&self) -> DialogFocusIdentity {
+        match self {
+            Self::Editor { editor_id, .. } => DialogFocusIdentity::Editor(*editor_id),
+            Self::Confirm(action) => DialogFocusIdentity::Confirm(action.clone()),
+            Self::Secret(tab_id) => DialogFocusIdentity::Secret(*tab_id),
+            Self::HostKey { tab_id, prompt_id } => DialogFocusIdentity::HostKey {
+                tab_id: *tab_id,
+                prompt_id: *prompt_id,
+            },
+            Self::ChangedHostKey { tab_id, request_id } => DialogFocusIdentity::ChangedHostKey {
+                tab_id: *tab_id,
+                request_id: *request_id,
+            },
+            Self::ConfirmClose(tab_id) => DialogFocusIdentity::ConfirmClose(*tab_id),
+        }
+    }
+}
+
+#[derive(Clone)]
+enum DialogSnapshot {
+    Editor(EditorDialogSnapshot),
+    Confirm(ConfirmAction),
+    Modal {
+        request: ModalRequest,
+        /// The shared one-time credential input; rendered by the presenter for
+        /// Secret requests. Carried in the payload because the AppView is
+        /// leased while the dialog layer renders and cannot be read then.
+        secret_input: Entity<InputState>,
+    },
+}
+
+#[derive(Clone)]
+struct EditorDialogSnapshot {
+    editor_id: EditorId,
+    is_editing: bool,
+    auth_method: AuthMethod,
+    remember: bool,
+    save_state: EditorSaveState,
+    name: Entity<InputState>,
+    host: Entity<InputState>,
+    port: Entity<InputState>,
+    username: Entity<InputState>,
+    private_key_path: Entity<InputState>,
+    secret: Entity<InputState>,
+}
+
+struct DialogPayload {
+    identity: DialogIdentity,
+    snapshot: DialogSnapshot,
+}
+
+struct DialogFocusBoundary {
+    scope: FocusHandle,
+    start: FocusHandle,
+    end: FocusHandle,
+}
+
+impl DialogFocusBoundary {
+    fn new(cx: &mut Context<DialogPresenter>) -> Self {
+        Self {
+            scope: cx.focus_handle(),
+            start: cx.focus_handle(),
+            end: cx.focus_handle(),
+        }
+    }
+
+    fn contains_focused(&self, window: &Window, cx: &App) -> bool {
+        self.scope.contains_focused(window, cx)
+    }
+}
 
 struct ConnectionEditor {
+    id: EditorId,
     form: ConnectionForm,
-    name: Entity<TextField>,
-    host: Entity<TextField>,
-    port: Entity<TextField>,
-    username: Entity<TextField>,
-    private_key_path: Entity<TextField>,
-    secret: Entity<TextField>,
+    name: Entity<InputState>,
+    host: Entity<InputState>,
+    port: Entity<InputState>,
+    username: Entity<InputState>,
+    private_key_path: Entity<InputState>,
+    secret: Entity<InputState>,
 }
 
 impl ConnectionEditor {
@@ -139,10 +281,10 @@ impl ConnectionEditor {
         window: &mut Window,
         cx: &mut Context<AppView>,
     ) -> Self {
-        let name = new_field(window, cx, MessageId::Name, &form.name, false, locale);
-        let host = new_field(window, cx, MessageId::Host, &form.host, false, locale);
-        let port = new_field(window, cx, MessageId::Port, &form.port, false, locale);
-        let username = new_field(
+        let name = new_input(window, cx, MessageId::Name, &form.name, false, locale);
+        let host = new_input(window, cx, MessageId::Host, &form.host, false, locale);
+        let port = new_input(window, cx, MessageId::Port, &form.port, false, locale);
+        let username = new_input(
             window,
             cx,
             MessageId::Username,
@@ -150,7 +292,7 @@ impl ConnectionEditor {
             false,
             locale,
         );
-        let private_key_path = new_field(
+        let private_key_path = new_input(
             window,
             cx,
             MessageId::PrivateKey,
@@ -163,8 +305,9 @@ impl ConnectionEditor {
         } else {
             MessageId::Password
         };
-        let secret = new_field(window, cx, secret_id, "", true, locale);
+        let secret = new_input(window, cx, secret_id, "", true, locale);
         Self {
+            id: EditorId(Uuid::new_v4()),
             form,
             name,
             host,
@@ -176,27 +319,33 @@ impl ConnectionEditor {
     }
 
     fn request(&mut self, cx: &App) -> Result<crate::credentials::SaveProfileRequest, FormError> {
-        self.form.name = self.name.read(cx).value().to_owned();
-        self.form.host = self.host.read(cx).value().to_owned();
-        self.form.port = self.port.read(cx).value().to_owned();
-        self.form.username = self.username.read(cx).value().to_owned();
-        self.form.private_key_path = PathBuf::from(self.private_key_path.read(cx).value());
-        self.form.secret = self.secret.read(cx).value().to_owned();
+        self.form.name = self.name.read(cx).value().to_string();
+        self.form.host = self.host.read(cx).value().to_string();
+        self.form.port = self.port.read(cx).value().to_string();
+        self.form.username = self.username.read(cx).value().to_string();
+        self.form.private_key_path =
+            PathBuf::from(self.private_key_path.read(cx).value().to_string());
+        self.form.secret = self.secret.read(cx).value().to_string();
         self.form.save_request()
     }
 }
 
-fn new_field(
+fn new_input(
     window: &mut Window,
     cx: &mut Context<AppView>,
     placeholder: MessageId,
     value: &str,
     masked: bool,
     locale: ResolvedLocale,
-) -> Entity<TextField> {
+) -> Entity<InputState> {
     let placeholder = Catalog::text(locale, placeholder);
     let value = value.to_owned();
-    cx.new(|cx| TextField::new(window, cx, placeholder, value, masked))
+    cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder(placeholder)
+            .default_value(value)
+            .masked(masked)
+    })
 }
 
 pub struct AppView {
@@ -206,22 +355,20 @@ pub struct AppView {
     coordinator: Option<Arc<ProfileCredentialCoordinator<SystemCredentialStore>>>,
     ssh: Option<SshService>,
     tabs: TabCollection,
-    search: Entity<TextField>,
-    secret: Entity<TextField>,
+    search: Entity<InputState>,
+    secret: Entity<InputState>,
     connect_secrets: HashMap<ProfileId, SecretString>,
     connecting_profiles: std::collections::HashSet<ProfileId>,
     editor: Option<ConnectionEditor>,
     confirm: Option<ConfirmAction>,
-    saving: bool,
+    saving_editor: Option<EditorId>,
+    dialog_presenter: Option<Entity<DialogPresenter>>,
     main_view: MainView,
     locale: ResolvedLocale,
     system_locale: Option<String>,
     theme: ResolvedTheme,
     focus_handle: FocusHandle,
     terminal_focus: FocusHandle,
-    modal_focus: FocusHandle,
-    last_modal_signature: u8,
-    overlay_was_open: bool,
     pending_terminal_focus: bool,
     composing: bool,
     compose_tab: Option<TabId>,
@@ -277,8 +424,20 @@ impl AppView {
             .as_ref()
             .map(|state| state.resolved_theme(system_is_dark))
             .unwrap_or(ResolvedTheme::Dark);
-        let search = new_field(window, cx, MessageId::SearchConnections, "", false, locale);
-        let secret = new_field(window, cx, MessageId::CredentialRequired, "", true, locale);
+        Theme::change(
+            match theme {
+                ResolvedTheme::Light => ThemeMode::Light,
+                ResolvedTheme::Dark => ThemeMode::Dark,
+            },
+            Some(window),
+            cx,
+        );
+        gpui_component::set_locale(match locale {
+            ResolvedLocale::EnUs => "en",
+            ResolvedLocale::ZhCn => "zh-CN",
+        });
+        let search = new_input(window, cx, MessageId::SearchConnections, "", false, locale);
+        let secret = new_input(window, cx, MessageId::CredentialRequired, "", true, locale);
         let search_subscription = cx.observe(&search, |this, _, cx| {
             let _ = this;
             cx.notify();
@@ -296,16 +455,14 @@ impl AppView {
             connecting_profiles: std::collections::HashSet::new(),
             editor: None,
             confirm: None,
-            saving: false,
+            saving_editor: None,
+            dialog_presenter: None,
             main_view: MainView::Sessions,
             locale,
             system_locale,
             theme,
             focus_handle: cx.focus_handle(),
             terminal_focus: cx.focus_handle(),
-            modal_focus: cx.focus_handle(),
-            last_modal_signature: 0,
-            overlay_was_open: false,
             pending_terminal_focus: false,
             composing: false,
             compose_tab: None,
@@ -335,40 +492,49 @@ impl AppView {
         Catalog::text(self.locale, id)
     }
 
-    fn tokens(&self) -> ThemeTokens {
-        self.theme.tokens()
-    }
-
-    fn refresh_preferences(&mut self, window: &Window) {
+    fn refresh_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(state) = &self.state else {
             return;
         };
-        self.locale = state.resolved_locale(self.system_locale.as_deref());
+        let locale = state.resolved_locale(self.system_locale.as_deref());
         let theme = state.resolved_theme(is_dark(window.appearance()));
+        if self.locale != locale {
+            self.locale = locale;
+            gpui_component::set_locale(match locale {
+                ResolvedLocale::EnUs => "en",
+                ResolvedLocale::ZhCn => "zh-CN",
+            });
+            self.update_input_placeholders(window, cx);
+        }
         if self.theme != theme {
             self.theme = theme;
+            Theme::change(
+                match theme {
+                    ResolvedTheme::Light => ThemeMode::Light,
+                    ResolvedTheme::Dark => ThemeMode::Dark,
+                },
+                Some(window),
+                cx,
+            );
             self.tabs.set_terminal_colors(self.theme.terminal_colors());
         }
     }
 
-    fn update_text_fields(&mut self, cx: &mut Context<Self>) {
-        let tokens = self.tokens();
-        let appearance = TextFieldAppearance {
-            background: rgb(tokens.surface).into(),
-            text: rgb(tokens.text).into(),
-            placeholder: rgb(tokens.muted).into(),
-            border: rgb(tokens.border).into(),
-            focus_border: rgb(tokens.accent).into(),
-            selection: rgb(tokens.selection).into(),
-            cursor: rgb(tokens.accent).into(),
-        };
+    fn update_input_placeholders(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let locale = self.locale;
         self.search.update(cx, |field, cx| {
-            field.set_appearance(appearance, cx);
-            field.set_placeholder(self.text(MessageId::SearchConnections), cx);
+            field.set_placeholder(
+                Catalog::text(locale, MessageId::SearchConnections),
+                window,
+                cx,
+            );
         });
         self.secret.update(cx, |field, cx| {
-            field.set_appearance(appearance, cx);
-            field.set_placeholder(self.text(MessageId::CredentialRequired), cx);
+            field.set_placeholder(
+                Catalog::text(locale, MessageId::CredentialRequired),
+                window,
+                cx,
+            );
         });
         if let Some(editor) = &self.editor {
             let fields = [
@@ -388,8 +554,7 @@ impl AppView {
             ];
             for (entity, placeholder) in fields {
                 entity.update(cx, |field, cx| {
-                    field.set_appearance(appearance, cx);
-                    field.set_placeholder(self.text(placeholder), cx);
+                    field.set_placeholder(Catalog::text(locale, placeholder), window, cx);
                 });
             }
         }
@@ -402,11 +567,6 @@ impl AppView {
             window,
             cx,
         ));
-        if let Some(editor) = &self.editor {
-            editor.name.update(cx, |field, _| {
-                field.focus_handle().focus(window);
-            });
-        }
         cx.notify();
     }
 
@@ -423,16 +583,14 @@ impl AppView {
             window,
             cx,
         ));
-        if let Some(editor) = &self.editor {
-            editor.name.update(cx, |field, _| {
-                field.focus_handle().focus(window);
-            });
-        }
         cx.notify();
     }
 
-    fn save_editor(&mut self, cx: &mut Context<Self>) {
-        if self.saving {
+    fn save_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor_id) = self.editor.as_ref().map(|editor| editor.id) else {
+            return;
+        };
+        if self.saving_editor.is_some() {
             return;
         }
         let request = match self.editor.as_mut().map(|editor| editor.request(cx)) {
@@ -449,11 +607,15 @@ impl AppView {
             cx.notify();
             return;
         };
-        self.saving = true;
-        cx.spawn(async move |weak, cx| {
+        self.saving_editor = Some(editor_id);
+        cx.spawn_in(window, async move |weak, cx| {
             let result = coordinator.save_profile(request);
-            weak.update(cx, |this, cx| {
-                this.saving = false;
+            weak.update_in(cx, |this, _window, cx| {
+                // A newer editor may be open; only reconcile the editor that
+                // started this transaction.
+                if this.saving_editor == Some(editor_id) {
+                    this.saving_editor = None;
+                }
                 match result {
                     Ok(outcome) => {
                         if let Some(secret) = outcome.connect_secret {
@@ -465,7 +627,13 @@ impl AppView {
                             this.status_message = Some(MessageId::StorageCorrupt);
                             return;
                         }
-                        this.editor = None;
+                        if this
+                            .editor
+                            .as_ref()
+                            .is_some_and(|editor| editor.id == editor_id)
+                        {
+                            this.editor = None;
+                        }
                         this.status_message = None;
                     }
                     Err(error) => this.status_message = Some(transaction_error_message_id(&error)),
@@ -477,30 +645,49 @@ impl AppView {
         .detach();
     }
 
-    fn browse_private_key(&mut self, cx: &mut Context<Self>) {
+    fn cancel_editor(&mut self, cx: &mut Context<Self>) {
+        self.editor = None;
+        cx.notify();
+    }
+    fn browse_private_key(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor_id) = self.editor.as_ref().map(|editor| editor.id) else {
+            return;
+        };
         let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
             prompt: None,
         });
-        cx.spawn(async move |weak, cx| {
+        cx.spawn_in(window, async move |weak, cx| {
             let Ok(Ok(Some(paths))) = receiver.await else {
                 return;
             };
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
-            let _ = weak.update(cx, |this, cx| {
-                if let Some(editor) = &this.editor {
-                    editor.private_key_path.update(cx, |field, cx| {
-                        field.set_value(path.to_string_lossy().into_owned(), cx);
-                    });
-                }
-                cx.notify();
+            let _ = weak.update_in(cx, |this, window, cx| {
+                this.apply_browse_result(editor_id, path, window, cx);
             });
         })
         .detach();
+    }
+
+    fn apply_browse_result(
+        &mut self,
+        editor_id: EditorId,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(editor) = &self.editor
+            && editor.id == editor_id
+        {
+            editor.private_key_path.update(cx, |field, cx| {
+                field.set_value(path.to_string_lossy().into_owned(), window, cx);
+            });
+        }
+        cx.notify();
     }
 
     fn connect_profile(
@@ -556,9 +743,6 @@ impl AppView {
                     self.theme.terminal_colors(),
                     needs_secret,
                 );
-                if needs_secret {
-                    self.clear_secret_field(cx);
-                }
                 cx.notify();
                 return;
             }
@@ -570,16 +754,15 @@ impl AppView {
             self.theme.terminal_colors(),
             needs_secret,
         );
-        if needs_secret {
-            self.clear_secret_field(cx);
-        } else {
+        if !needs_secret {
             self.start_session(tab_id, secret, cx);
         }
         cx.notify();
     }
 
-    fn clear_secret_field(&mut self, cx: &mut Context<Self>) {
-        self.secret.update(cx, |field, cx| field.set_value("", cx));
+    fn clear_secret_field(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.secret
+            .update(cx, |field, cx| field.set_value("", window, cx));
     }
 
     fn saved_secret(
@@ -597,20 +780,36 @@ impl AppView {
         }
     }
 
-    fn submit_secret(&mut self, cx: &mut Context<Self>) {
-        let Some(ModalRequest::Secret { tab_id }) = self.tabs.modals().current() else {
+    fn submit_secret(
+        &mut self,
+        expected_tab_id: TabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .tabs
+            .modals()
+            .current()
+            .is_some_and(|request| request.is_secret_for(expected_tab_id))
+        {
             return;
-        };
-        let tab_id = *tab_id;
-        let value = self.secret.read(cx).value().to_owned();
+        }
+        let value = self.secret.read(cx).value().to_string();
         if value.is_empty() {
             self.status_message = Some(MessageId::CredentialRequired);
             cx.notify();
             return;
         }
-        self.secret.update(cx, |field, cx| field.set_value("", cx));
-        self.tabs.modals_mut().complete_current();
-        self.start_session(tab_id, Some(SecretString::from(value)), cx);
+        if self
+            .tabs
+            .modals_mut()
+            .complete_current_if(|request| request.is_secret_for(expected_tab_id))
+            .is_none()
+        {
+            return;
+        }
+        self.clear_secret_field(window, cx);
+        self.start_session(expected_tab_id, Some(SecretString::from(value)), cx);
     }
 
     fn start_session(
@@ -638,7 +837,6 @@ impl AppView {
                         Ok(true) => {
                             if this.tabs.request_secret(tab_id).is_ok() {
                                 this.status_message = None;
-                                this.clear_secret_field(cx);
                             } else {
                                 this.status_message = Some(MessageId::InvalidProfile);
                             }
@@ -808,7 +1006,6 @@ impl AppView {
                 self.status_message = Some(MessageId::InvalidProfile);
             } else {
                 self.status_message = None;
-                self.secret.update(cx, |field, cx| field.set_value("", cx));
             }
             cx.notify();
             return;
@@ -878,7 +1075,6 @@ impl AppView {
                         self.status_message = Some(MessageId::InvalidProfile);
                     } else {
                         self.status_message = None;
-                        self.clear_secret_field(cx);
                     }
                 } else {
                     self.start_session(tab_id, secret, cx);
@@ -894,31 +1090,43 @@ impl AppView {
         cx.notify();
     }
 
-    fn cancel_tab_close(&mut self, cx: &mut Context<Self>) {
-        self.tabs.modals_mut().complete_current();
+    fn cancel_tab_close(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        if self
+            .tabs
+            .modals_mut()
+            .complete_current_if(|request| request.is_confirm_close_for(tab_id))
+            .is_none()
+        {
+            return;
+        }
         cx.notify();
     }
 
     fn confirm_tab_close(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
-        if matches!(
-            self.tabs.modals_mut().complete_current(),
-            Some(ModalRequest::ConfirmClose { tab_id: queued }) if queued == tab_id
-        ) && self.tabs.begin_close(tab_id)
+        if self
+            .tabs
+            .modals_mut()
+            .complete_current_if(|request| request.is_confirm_close_for(tab_id))
+            .is_none()
         {
-            cx.spawn(async move |weak, cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_secs(2))
-                    .await;
-                weak.update(cx, |this, cx| {
-                    if this.tabs.tab(tab_id).is_some_and(|tab| tab.closing()) {
-                        this.tabs.remove(tab_id);
-                        cx.notify();
-                    }
-                })
-                .ok();
-            })
-            .detach();
+            return;
         }
+        if !self.tabs.begin_close(tab_id) {
+            return;
+        }
+        cx.spawn(async move |weak, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(2))
+                .await;
+            weak.update(cx, |this, cx| {
+                if this.tabs.tab(tab_id).is_some_and(|tab| tab.closing()) {
+                    this.tabs.remove(tab_id);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 
@@ -982,43 +1190,53 @@ impl AppView {
         decision: HostKeyDecision,
         cx: &mut Context<Self>,
     ) {
-        let result = self
+        if self
+            .tabs
+            .modals_mut()
+            .complete_current_if(|request| request.is_host_key_for(tab_id, prompt_id))
+            .is_none()
+        {
+            return;
+        }
+        if let Err(error) = self
             .tabs
             .tab(tab_id)
             .ok_or(SessionError::Disconnected)
-            .and_then(|tab| tab.decide_host_key(prompt_id, decision));
-        if matches!(
-            self.tabs.modals_mut().complete_current(),
-            Some(ModalRequest::HostKey {
-                tab_id: queued,
-                prompt_id: queued_prompt,
-                ..
-            }) if queued == tab_id && queued_prompt == prompt_id
-        ) && let Err(error) = result
+            .and_then(|tab| tab.decide_host_key(prompt_id, decision))
         {
             self.status_message = Some(session_error_message_id(error));
         }
         cx.notify();
     }
 
-    fn open_trusted_hosts(&mut self, cx: &mut Context<Self>) {
-        self.tabs.modals_mut().complete_current();
+    fn open_trusted_hosts(&mut self, tab_id: TabId, request_id: Uuid, cx: &mut Context<Self>) {
+        if self
+            .tabs
+            .modals_mut()
+            .complete_current_if(|request| request.is_changed_host_key_for(tab_id, request_id))
+            .is_none()
+        {
+            return;
+        }
         self.main_view = MainView::Settings;
         cx.notify();
     }
 
-    fn cancel_secret(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
-        self.clear_secret_field(cx);
-        if matches!(
-            self.tabs.modals_mut().complete_current(),
-            Some(ModalRequest::Secret { tab_id: queued }) if queued == tab_id
-        ) {
-            self.tabs.remove(tab_id);
+    fn cancel_secret(&mut self, tab_id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .tabs
+            .modals_mut()
+            .complete_current_if(|request| request.is_secret_for(tab_id))
+            .is_none()
+        {
+            return;
         }
+        self.clear_secret_field(window, cx);
+        self.tabs.remove(tab_id);
         cx.notify();
     }
 
-    fn set_locale(&mut self, setting: LocaleSetting, window: &Window, cx: &mut Context<Self>) {
+    fn set_locale(&mut self, setting: LocaleSetting, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .state
             .as_mut()
@@ -1026,11 +1244,11 @@ impl AppView {
         {
             self.status_message = Some(MessageId::StorageCorrupt);
         }
-        self.refresh_preferences(window);
+        self.refresh_preferences(window, cx);
         cx.notify();
     }
 
-    fn set_theme(&mut self, setting: ThemeSetting, window: &Window, cx: &mut Context<Self>) {
+    fn set_theme(&mut self, setting: ThemeSetting, window: &mut Window, cx: &mut Context<Self>) {
         if self
             .state
             .as_mut()
@@ -1038,7 +1256,7 @@ impl AppView {
         {
             self.status_message = Some(MessageId::StorageCorrupt);
         }
-        self.refresh_preferences(window);
+        self.refresh_preferences(window, cx);
         cx.notify();
     }
 
@@ -1058,7 +1276,7 @@ impl AppView {
         }
     }
 
-    fn retry_storage(&mut self, window: &Window, cx: &mut Context<Self>) {
+    fn retry_storage(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let outcome = AppState::load(self.root.clone());
         let AppLoadOutcome::Ready(state) = outcome else {
             return;
@@ -1075,7 +1293,7 @@ impl AppView {
                 self.credentials = Some(credentials);
                 self.coordinator = Some(coordinator);
                 self.ssh = Some(ssh);
-                self.refresh_preferences(window);
+                self.refresh_preferences(window, cx);
                 self.status_message = None;
             }
             Err(error) => self.status_message = Some(session_error_message_id(error)),
@@ -1358,54 +1576,56 @@ impl AppView {
         .detach();
     }
 
-    fn render_recovery(&self, tokens: ThemeTokens, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_recovery(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         div()
             .size_full()
             .flex()
             .items_center()
             .justify_center()
-            .bg(rgb(tokens.surface))
-            .text_color(rgb(tokens.text))
             .child(
                 div()
                     .w(px(560.))
-                    .p(px(32.))
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(tokens.border))
                     .flex()
                     .flex_col()
                     .gap(px(16.))
-                    .child(self.text(MessageId::StorageCorrupt))
+                    .child(
+                        Alert::error("recovery-alert", self.text(MessageId::StorageCorrupt))
+                            .title("OxideSSH"),
+                    )
                     .child(
                         div()
-                            .text_size(px(13.))
-                            .text_color(rgb(tokens.muted))
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
                             .child(self.root.to_string_lossy().into_owned()),
                     )
                     .child(
                         div()
                             .flex()
                             .gap(px(10.))
-                            .child(self.button(
-                                "recovery-open",
-                                MessageId::OpenConfigDirectory,
-                                tokens,
-                                cx.listener(|this, _, _, cx| this.open_config_directory(cx)),
-                            ))
-                            .child(self.button(
-                                "recovery-retry",
-                                MessageId::Retry,
-                                tokens,
-                                cx.listener(|this, _, window, cx| this.retry_storage(window, cx)),
-                            )),
+                            .child(
+                                Button::new("recovery-open")
+                                    .label(self.text(MessageId::OpenConfigDirectory))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.open_config_directory(cx)
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                Button::new("recovery-retry")
+                                    .label(self.text(MessageId::Retry))
+                                    .primary()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.retry_storage(window, cx)
+                                    })),
+                            ),
                     ),
             )
             .into_any_element()
     }
 
-    fn render_sidebar(&mut self, tokens: ThemeTokens, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let query = self.search.read(cx).value().to_owned();
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let query = self.search.read(cx).value().to_string();
         let Some(state) = &mut self.state else {
             return div().into_any_element();
         };
@@ -1427,8 +1647,8 @@ impl AppView {
             list = list.child(
                 div()
                     .p(px(12.))
-                    .text_size(px(13.))
-                    .text_color(rgb(tokens.muted))
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
                     .child(self.text(empty_message)),
             );
         }
@@ -1436,129 +1656,81 @@ impl AppView {
             let profile_for_connect = profile.clone();
             let profile_for_edit = profile.clone();
             let profile_for_delete = profile.clone();
-            let profile_for_connect_key = profile.clone();
-            let profile_for_edit_key = profile.clone();
-            let delete_id = profile.id;
             let endpoint = format!(
                 "{}@{}:{}",
                 profile.username, profile.endpoint.host, profile.endpoint.port
             );
-            let status = self.profile_status(profile.id);
+            let status = self
+                .profile_status(profile.id)
+                .map(|status| status.to_owned());
+            let edit_label = self.text(MessageId::Edit).to_owned();
+            let delete_label = self.text(MessageId::Delete).to_owned();
+            let edit_id = SharedString::from(format!("edit-{}", profile.id.0));
+            let delete_id = SharedString::from(format!("delete-{}", profile.id.0));
+            let view = cx.entity();
             list = list.child(
-                div()
-                    .id(SharedString::from(format!("profile-{}", profile.id.0)))
-                    .p(px(10.))
-                    .rounded(px(7.))
-                    .border_1()
-                    .border_color(rgb(tokens.border))
-                    .cursor_pointer()
-                    .tab_stop(true)
-                    .focus(|element| element.border_color(rgb(tokens.accent)))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.connect_profile(profile_for_connect.clone(), window, cx)
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                        if activation_key(event) {
-                            this.connect_profile(profile_for_connect_key.clone(), window, cx);
-                            cx.stop_propagation();
-                        }
-                    }))
+                ListItem::new(SharedString::from(format!("profile-{}", profile.id.0)))
                     .child(
                         div()
                             .flex()
-                            .items_center()
-                            .justify_between()
+                            .flex_col()
+                            .gap(px(3.))
+                            .child(profile.name.clone())
                             .child(
                                 div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(3.))
-                                    .child(profile.name.clone())
-                                    .child(
-                                        div()
-                                            .text_size(px(12.))
-                                            .text_color(rgb(tokens.muted))
-                                            .child(endpoint.clone()),
-                                    )
-                                    .when_some(status, |element, status| {
-                                        element.child(
-                                            div()
-                                                .text_size(px(11.))
-                                                .text_color(rgb(tokens.accent))
-                                                .child(status),
-                                        )
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(endpoint),
+                            )
+                            .when_some(status, |element, status| {
+                                element.child(
+                                    div().text_xs().text_color(cx.theme().primary).child(status),
+                                )
+                            }),
+                    )
+                    .suffix(move |_, _| {
+                        let edit_view = view.clone();
+                        let delete_view = view.clone();
+                        let edit_profile = profile_for_edit.clone();
+                        let delete_profile = profile_for_delete.clone();
+                        h_flex()
+                            .gap(px(6.))
+                            .child(
+                                Button::new(edit_id.clone())
+                                    .label(edit_label.clone())
+                                    .ghost()
+                                    .compact()
+                                    .on_click(move |_, window, cx| {
+                                        edit_view.update(cx, |this, cx| {
+                                            cx.stop_propagation();
+                                            this.show_edit_connection(
+                                                edit_profile.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        });
                                     }),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .gap(px(6.))
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "edit-{}",
-                                                profile.id.0
-                                            )))
-                                            .cursor_pointer()
-                                            .tab_stop(true)
-                                            .focus(|element| element.bg(rgb(tokens.selection)))
-                                            .text_size(px(11.))
-                                            .text_color(rgb(tokens.accent))
-                                            .child(self.text(MessageId::Edit))
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                cx.stop_propagation();
-                                                this.show_edit_connection(
-                                                    profile_for_edit.clone(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            }))
-                                            .on_key_down(cx.listener(
-                                                move |this, event: &KeyDownEvent, window, cx| {
-                                                    if activation_key(event) {
-                                                        this.show_edit_connection(
-                                                            profile_for_edit_key.clone(),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                        cx.stop_propagation();
-                                                    }
-                                                },
-                                            )),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "delete-{}",
-                                                profile.id.0
-                                            )))
-                                            .cursor_pointer()
-                                            .tab_stop(true)
-                                            .focus(|element| element.bg(rgb(tokens.selection)))
-                                            .text_size(px(11.))
-                                            .text_color(rgb(tokens.danger))
-                                            .child(self.text(MessageId::Delete))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                cx.stop_propagation();
-                                                this.confirm = Some(ConfirmAction::DeleteProfile(
-                                                    profile_for_delete.id,
-                                                ));
-                                                cx.notify();
-                                            }))
-                                            .on_key_down(cx.listener(
-                                                move |this, event: &KeyDownEvent, _, cx| {
-                                                    if activation_key(event) {
-                                                        this.confirm = Some(
-                                                            ConfirmAction::DeleteProfile(delete_id),
-                                                        );
-                                                        cx.stop_propagation();
-                                                        cx.notify();
-                                                    }
-                                                },
-                                            )),
-                                    ),
-                            ),
-                    ),
+                                Button::new(delete_id.clone())
+                                    .label(delete_label.clone())
+                                    .ghost()
+                                    .compact()
+                                    .on_click(move |_, _, cx| {
+                                        delete_view.update(cx, |this, cx| {
+                                            cx.stop_propagation();
+                                            this.confirm = Some(ConfirmAction::DeleteProfile(
+                                                delete_profile.id,
+                                            ));
+                                            cx.notify();
+                                        });
+                                    }),
+                            )
+                            .into_any_element()
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.connect_profile(profile_for_connect.clone(), window, cx)
+                    })),
             );
         }
         div()
@@ -1569,8 +1741,8 @@ impl AppView {
             .gap(px(10.))
             .p(px(12.))
             .border_r_1()
-            .border_color(rgb(tokens.border))
-            .bg(rgb(tokens.surface))
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
             .child(
                 div()
                     .flex()
@@ -1583,41 +1755,25 @@ impl AppView {
                             .child(self.text(MessageId::AppName)),
                     )
                     .child(
-                        div()
-                            .id("settings")
-                            .cursor_pointer()
-                            .tab_stop(true)
-                            .text_color(rgb(tokens.accent))
-                            .focus(|element| element.bg(rgb(tokens.selection)))
-                            .child(self.text(MessageId::Settings))
+                        Button::new("settings")
+                            .label(self.text(MessageId::Settings))
+                            .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.main_view = MainView::Settings;
                                 cx.notify();
-                            }))
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                                if activation_key(event) {
-                                    this.main_view = MainView::Settings;
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
                             })),
                     ),
             )
+            .child(Input::new(&self.search).prefix(Icon::new(IconName::Search)))
             .child(
-                div()
-                    .w_full()
-                    .p(px(8.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgb(tokens.border))
-                    .child(self.search.clone()),
+                Button::new("add-connection")
+                    .label(self.text(MessageId::AddConnection))
+                    .icon(IconName::Plus)
+                    .primary()
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.show_add_connection(window, cx)),
+                    ),
             )
-            .child(self.button(
-                "add-connection",
-                MessageId::AddConnection,
-                tokens,
-                cx.listener(|this, _, window, cx| this.show_add_connection(window, cx)),
-            ))
             .child(list)
             .into_any_element()
     }
@@ -1632,93 +1788,59 @@ impl AppView {
         Some(self.text(tab_state_message_id(tab.state())))
     }
 
-    fn render_sessions(&mut self, tokens: ThemeTokens, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_sessions(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.tabs.tabs().is_empty() {
             return div()
                 .size_full()
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(rgb(tokens.muted))
+                .text_color(cx.theme().muted_foreground)
                 .child(self.text(MessageId::SelectConnection))
                 .into_any_element();
         }
         let active = self.tabs.active();
-        let mut tab_bar = div()
-            .id("tab-strip")
-            .h(px(40.))
-            .flex()
-            .items_center()
-            .gap(px(4.))
-            .px(px(8.))
-            .overflow_x_scroll()
-            .border_b_1()
-            .border_color(rgb(tokens.border));
         let tab_data: Vec<_> = self
             .tabs
             .tabs()
             .iter()
             .map(|tab| (tab.id(), tab.profile().name.clone(), *tab.state()))
             .collect();
-        for (id, name, state) in tab_data {
-            let close_id = id;
+        let selected_index = tab_data.iter().position(|(id, _, _)| Some(*id) == active);
+        let tab_ids: Vec<_> = tab_data.iter().map(|(id, _, _)| *id).collect();
+        let theme = cx.theme();
+        let component_tabs = tab_data.into_iter().map(|(id, name, state)| {
             let dot_color = match state {
-                TabState::Connected => tokens.accent,
-                TabState::Disconnected { .. } => tokens.danger,
-                TabState::AwaitingHostKey | TabState::AwaitingSecret => tokens.muted,
-                TabState::Connecting => tokens.muted,
+                TabState::Connected => theme.primary,
+                TabState::Disconnected { .. } => theme.danger,
+                TabState::AwaitingHostKey | TabState::AwaitingSecret | TabState::Connecting => {
+                    theme.muted
+                }
             };
-            tab_bar = tab_bar.child(
-                div()
-                    .id(SharedString::from(format!("tab-{id:?}")))
-                    .h_full()
-                    .px(px(10.))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .rounded(px(5.))
-                    .cursor_pointer()
-                    .tab_stop(true)
-                    .focus(|element| element.border_color(rgb(tokens.accent)))
-                    .when(active == Some(id), |element| {
-                        element.bg(rgb(tokens.selection))
-                    })
-                    .child(div().size(px(8.)).rounded_full().bg(rgb(dot_color)))
-                    .child(name)
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("close-{id:?}")))
-                            .text_color(rgb(tokens.muted))
-                            .child("×")
-                            .cursor_pointer()
-                            .tab_stop(true)
-                            .focus(|element| element.bg(rgb(tokens.selection)))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.close_tab(close_id, cx);
-                            }))
-                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                                if activation_key(event) {
-                                    this.close_tab(close_id, cx);
-                                    cx.stop_propagation();
-                                }
-                            })),
-                    )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.tabs.set_active(id);
-                        cx.notify();
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                        if activation_key(event) {
-                            this.tabs.set_active(id);
-                            cx.stop_propagation();
-                            cx.notify();
-                        }
-                    })),
-            );
+            Tab::new()
+                .label(name)
+                .prefix(div().size(px(8.)).rounded_full().bg(dot_color))
+                .suffix(
+                    Button::new(SharedString::from(format!("close-{id:?}")))
+                        .label("×")
+                        .ghost()
+                        .compact()
+                        .on_click(cx.listener(move |this, _, _, cx| this.close_tab(id, cx))),
+                )
+        });
+        let mut tab_bar = TabBar::new("tab-strip")
+            .h(px(40.))
+            .children(component_tabs)
+            .on_click(cx.listener(move |this, index, _, cx| {
+                if let Some(id) = tab_ids.get(*index) {
+                    this.tabs.set_active(*id);
+                    cx.notify();
+                }
+            }));
+        if let Some(index) = selected_index {
+            tab_bar = tab_bar.selected_index(index);
         }
-        let body = self.render_active_tab(tokens, cx);
+        let body = self.render_active_tab(cx);
         div()
             .size_full()
             .flex()
@@ -1728,11 +1850,7 @@ impl AppView {
             .into_any_element()
     }
 
-    fn render_active_tab(
-        &mut self,
-        tokens: ThemeTokens,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
+    fn render_active_tab(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let Some(tab_id) = self.tabs.active() else {
             return div().into_any_element();
         };
@@ -1785,19 +1903,21 @@ impl AppView {
                                         .py(px(8.))
                                         .rounded(px(6.))
                                         .border_1()
-                                        .border_color(rgb(tokens.border))
-                                        .bg(rgb(tokens.surface))
-                                        .text_color(rgb(tokens.text))
+                                        .border_color(cx.theme().border)
+                                        .bg(cx.theme().background)
+                                        .text_color(cx.theme().foreground)
                                         .text_size(px(13.))
                                         .child(self.text(disconnect_reason_message_id(reason)))
-                                        .child(self.button(
-                                            "retry-session",
-                                            MessageId::Retry,
-                                            tokens,
-                                            cx.listener(move |this, _, window, cx| {
-                                                this.reconnect(tab_id, window, cx)
-                                            }),
-                                        )),
+                                        .child(
+                                            Button::new("retry-session")
+                                                .label(self.text(MessageId::Retry))
+                                                .primary()
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.reconnect(tab_id, window, cx)
+                                                    },
+                                                )),
+                                        ),
                                 ),
                         )
                     })
@@ -1808,14 +1928,14 @@ impl AppView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(rgb(tokens.muted))
+                .text_color(cx.theme().muted_foreground)
                 .child(self.text(tab_state_message_id(&state)))
                 .into_any_element(),
             None => div().into_any_element(),
         }
     }
 
-    fn render_settings(&mut self, tokens: ThemeTokens, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_settings(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let settings = self.state.as_ref().map(|state| state.settings().clone());
         let known_hosts = self
             .state
@@ -1829,13 +1949,12 @@ impl AppView {
         if known_hosts.is_empty() {
             trusted = trusted.child(
                 div()
-                    .text_color(rgb(tokens.muted))
+                    .text_color(cx.theme().muted_foreground)
                     .child(self.text(MessageId::NoTrustedHosts)),
             );
         }
         for host in known_hosts {
             let endpoint = host.endpoint();
-            let endpoint_for_key = endpoint.clone();
             let summary = format!(
                 "{}:{}  {}  {}  {}",
                 host.host,
@@ -1844,47 +1963,55 @@ impl AppView {
                 host.fingerprint_sha256,
                 host.accepted_at_unix
             );
+            let delete_label = self.text(MessageId::Delete).to_owned();
+            let view = cx.entity();
             trusted = trusted.child(
-                div()
-                    .p(px(10.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgb(tokens.border))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(rgb(tokens.muted))
-                            .child(summary),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!(
-                                "delete-host-{}-{}",
-                                endpoint.host, endpoint.port
-                            )))
-                            .cursor_pointer()
-                            .tab_stop(true)
-                            .focus(|element| element.bg(rgb(tokens.selection)))
-                            .text_color(rgb(tokens.danger))
-                            .child(self.text(MessageId::Delete))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.confirm = Some(ConfirmAction::DeleteHost(endpoint.clone()));
+                ListItem::new(SharedString::from(format!(
+                    "delete-host-{}-{}",
+                    endpoint.host, endpoint.port
+                )))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(summary),
+                )
+                .suffix(move |_, _| {
+                    let delete_view = view.clone();
+                    let delete_endpoint = endpoint.clone();
+                    Button::new("delete-host-action")
+                        .label(delete_label.clone())
+                        .ghost()
+                        .compact()
+                        .on_click(move |_, _, cx| {
+                            delete_view.update(cx, |this, cx| {
+                                this.confirm =
+                                    Some(ConfirmAction::DeleteHost(delete_endpoint.clone()));
                                 cx.notify();
-                            }))
-                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                                if activation_key(event) {
-                                    this.confirm =
-                                        Some(ConfirmAction::DeleteHost(endpoint_for_key.clone()));
-                                    cx.stop_propagation();
-                                    cx.notify();
-                                }
-                            })),
-                    ),
+                            });
+                        })
+                        .into_any_element()
+                }),
             );
         }
+        let locale_index = match settings.locale {
+            LocaleSetting::System => 0,
+            LocaleSetting::EnUs => 1,
+            LocaleSetting::ZhCn => 2,
+        };
+        let theme_index = match settings.theme {
+            ThemeSetting::System => 0,
+            ThemeSetting::Light => 1,
+            ThemeSetting::Dark => 2,
+        };
+        let language_label = self.text(MessageId::Language).to_owned();
+        let system_label = self.text(MessageId::System).to_owned();
+        let english_label = self.text(MessageId::English).to_owned();
+        let simplified_label = self.text(MessageId::SimplifiedChinese).to_owned();
+        let theme_label = self.text(MessageId::Theme).to_owned();
+        let light_label = self.text(MessageId::Light).to_owned();
+        let dark_label = self.text(MessageId::Dark).to_owned();
+        let trusted_label = self.text(MessageId::TrustedHosts).to_owned();
         div()
             .id("settings-scroll")
             .size_full()
@@ -1904,126 +2031,70 @@ impl AppView {
                             .font_weight(gpui::FontWeight::BOLD)
                             .child(self.text(MessageId::Settings)),
                     )
-                    .child(self.button(
-                        "back-to-sessions",
-                        MessageId::Sessions,
-                        tokens,
-                        cx.listener(|this, _, _, cx| {
-                            this.main_view = MainView::Sessions;
-                            cx.notify();
-                        }),
-                    )),
-            )
-            .child(self.setting_group(
-                MessageId::Language,
-                [
-                    (MessageId::System, settings.locale == LocaleSetting::System),
-                    (MessageId::English, settings.locale == LocaleSetting::EnUs),
-                    (
-                        MessageId::SimplifiedChinese,
-                        settings.locale == LocaleSetting::ZhCn,
-                    ),
-                ],
-                tokens,
-                [
-                    Box::new(cx.listener(|this: &mut AppView, _, window, cx| {
-                        this.set_locale(LocaleSetting::System, window, cx)
-                    })),
-                    Box::new(cx.listener(|this: &mut AppView, _, window, cx| {
-                        this.set_locale(LocaleSetting::EnUs, window, cx)
-                    })),
-                    Box::new(cx.listener(|this: &mut AppView, _, window, cx| {
-                        this.set_locale(LocaleSetting::ZhCn, window, cx)
-                    })),
-                ],
-            ))
-            .child(self.setting_group(
-                MessageId::Theme,
-                [
-                    (MessageId::System, settings.theme == ThemeSetting::System),
-                    (MessageId::Light, settings.theme == ThemeSetting::Light),
-                    (MessageId::Dark, settings.theme == ThemeSetting::Dark),
-                ],
-                tokens,
-                [
-                    Box::new(cx.listener(|this: &mut AppView, _, window, cx| {
-                        this.set_theme(ThemeSetting::System, window, cx)
-                    })),
-                    Box::new(cx.listener(|this: &mut AppView, _, window, cx| {
-                        this.set_theme(ThemeSetting::Light, window, cx)
-                    })),
-                    Box::new(cx.listener(|this: &mut AppView, _, window, cx| {
-                        this.set_theme(ThemeSetting::Dark, window, cx)
-                    })),
-                ],
-            ))
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
                     .child(
-                        div()
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .child(self.text(MessageId::TrustedHosts)),
-                    )
-                    .child(trusted),
+                        Button::new("back-to-sessions")
+                            .label(self.text(MessageId::Sessions))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.main_view = MainView::Sessions;
+                                cx.notify();
+                            })),
+                    ),
             )
-            .into_any_element()
-    }
-
-    fn setting_group(
-        &self,
-        title: MessageId,
-        choices: [(MessageId, bool); 3],
-        tokens: ThemeTokens,
-        listeners: [SettingListener; 3],
-    ) -> gpui::AnyElement {
-        let mut row = div().flex().gap(px(8.));
-        for ((label, selected), listener) in choices.into_iter().zip(listeners) {
-            let listener: SharedSettingListener = Rc::from(listener);
-            let click_listener = listener.clone();
-            row = row.child(
-                div()
-                    .id(SharedString::from(format!("setting-{title:?}-{label:?}")))
-                    .px(px(12.))
-                    .py(px(7.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgb(tokens.border))
-                    .cursor_pointer()
-                    .tab_stop(true)
-                    .when(selected, |element| element.bg(rgb(tokens.selection)))
-                    .focus(|element| element.border_color(rgb(tokens.accent)))
-                    .child(self.text(label))
-                    .on_click(move |event, window, cx| click_listener(event, window, cx))
-                    .on_key_down(move |event, window, cx| {
-                        if activation_key(event) {
-                            listener(&ClickEvent::default(), window, cx);
-                            cx.stop_propagation();
-                        }
-                    }),
-            );
-        }
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(10.))
             .child(
-                div()
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child(self.text(title)),
+                GroupBox::new().title(language_label).child(
+                    RadioGroup::horizontal("setting-locale")
+                        .selected_index(Some(locale_index))
+                        .child(Radio::new("locale-system").label(system_label.clone()))
+                        .child(Radio::new("locale-english").label(english_label))
+                        .child(Radio::new("locale-chinese").label(simplified_label))
+                        .on_click(cx.listener(|this, index, window, cx| {
+                            let setting = match *index {
+                                1 => LocaleSetting::EnUs,
+                                2 => LocaleSetting::ZhCn,
+                                _ => LocaleSetting::System,
+                            };
+                            this.set_locale(setting, window, cx);
+                        })),
+                ),
             )
-            .child(row)
+            .child(
+                GroupBox::new().title(theme_label).child(
+                    RadioGroup::horizontal("setting-theme")
+                        .selected_index(Some(theme_index))
+                        .child(Radio::new("theme-system").label(system_label))
+                        .child(Radio::new("theme-light").label(light_label))
+                        .child(Radio::new("theme-dark").label(dark_label))
+                        .on_click(cx.listener(|this, index, window, cx| {
+                            let setting = match *index {
+                                1 => ThemeSetting::Light,
+                                2 => ThemeSetting::Dark,
+                                _ => ThemeSetting::System,
+                            };
+                            this.set_theme(setting, window, cx);
+                        })),
+                ),
+            )
+            .child(GroupBox::new().title(trusted_label).child(trusted))
             .into_any_element()
     }
 
-    fn select_auth_method(&mut self, method: AuthMethod, cx: &mut Context<Self>) {
+    fn select_auth_method(
+        &mut self,
+        method: AuthMethod,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(editor) = &mut self.editor {
             editor.form.auth_method = method;
-            editor
-                .secret
-                .update(cx, |field, cx| field.set_value("", cx));
+            let placeholder = if method == AuthMethod::PrivateKey {
+                MessageId::Passphrase
+            } else {
+                MessageId::Password
+            };
+            editor.secret.update(cx, |field, cx| {
+                field.set_value("", window, cx);
+                field.set_placeholder(Catalog::text(self.locale, placeholder), window, cx);
+            });
         }
         cx.notify();
     }
@@ -2035,476 +2106,152 @@ impl AppView {
         cx.notify();
     }
 
-    fn render_editor(
-        &self,
-        tokens: ThemeTokens,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
-        let editor = self.editor.as_ref()?;
-        let auth = editor.form.auth_method;
-        let field = |entity: Entity<TextField>| {
-            div()
-                .w_full()
-                .p(px(8.))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(rgb(tokens.border))
-                .child(entity)
-        };
-        let auth_button = |id: &'static str, label: MessageId, method: AuthMethod| {
-            div()
-                .id(id)
-                .px(px(10.))
-                .py(px(7.))
-                .rounded(px(6.))
-                .border_1()
-                .border_color(rgb(tokens.border))
-                .cursor_pointer()
-                .tab_stop(true)
-                .focus(|element| element.border_color(rgb(tokens.accent)))
-                .when(auth == method, |element| element.bg(rgb(tokens.selection)))
-                .child(self.text(label))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.select_auth_method(method, cx);
-                }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    if activation_key(event) {
-                        this.select_auth_method(method, cx);
-                        cx.stop_propagation();
-                    }
-                }))
-        };
-        let mut form = div()
-            .id("editor-scroll")
-            .w(px(560.))
-            .max_h(px(680.))
-            .overflow_y_scroll()
-            .p(px(24.))
-            .rounded(px(12.))
-            .border_1()
-            .border_color(rgb(tokens.border))
-            .bg(rgb(tokens.surface))
-            .flex()
-            .flex_col()
-            .gap(px(12.))
-            .child(
-                div()
-                    .text_size(px(20.))
-                    .font_weight(gpui::FontWeight::BOLD)
-                    .child(self.text(if editor.form.is_editing() {
-                        MessageId::Edit
-                    } else {
-                        MessageId::AddConnection
-                    })),
-            )
-            .child(field(editor.name.clone()))
-            .child(field(editor.host.clone()))
-            .child(field(editor.port.clone()))
-            .child(field(editor.username.clone()))
-            .child(
-                div()
-                    .flex()
-                    .gap(px(8.))
-                    .child(auth_button(
-                        "auth-password",
-                        MessageId::Password,
-                        AuthMethod::Password,
-                    ))
-                    .child(auth_button(
-                        "auth-private-key",
-                        MessageId::PrivateKey,
-                        AuthMethod::PrivateKey,
-                    ))
-                    .child(auth_button(
-                        "auth-agent",
-                        MessageId::Agent,
-                        AuthMethod::Agent,
-                    )),
-            );
-        match auth {
-            AuthMethod::Password => {
-                form = form.child(field(editor.secret.clone()));
-            }
-            AuthMethod::PrivateKey => {
-                form = form
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .child(field(editor.private_key_path.clone()))
-                            .child(self.button(
-                                "browse-private-key",
-                                MessageId::Browse,
-                                tokens,
-                                cx.listener(|this, _, _, cx| this.browse_private_key(cx)),
-                            )),
-                    )
-                    .child(field(editor.secret.clone()));
-            }
-            AuthMethod::Agent => {
-                form = form.child(
-                    div()
-                        .text_size(px(13.))
-                        .text_color(rgb(tokens.muted))
-                        .child(self.text(MessageId::AgentDescription)),
-                );
-            }
-        }
-        if auth != AuthMethod::Agent {
-            form = form.child(
-                div()
-                    .id("remember")
-                    .cursor_pointer()
-                    .tab_stop(true)
-                    .focus(|element| element.bg(rgb(tokens.selection)))
-                    .text_color(rgb(if editor.form.remember {
-                        tokens.accent
-                    } else {
-                        tokens.muted
-                    }))
-                    .child(format!(
-                        "{} {}",
-                        if editor.form.remember { "☑" } else { "☐" },
-                        self.text(MessageId::Remember)
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.toggle_remember(cx);
-                    }))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if activation_key(event) {
-                            this.toggle_remember(cx);
-                            cx.stop_propagation();
-                        }
-                    })),
-            );
-        }
-        form = form.child(
-            div()
-                .flex()
-                .justify_end()
-                .gap(px(8.))
-                .child(self.button(
-                    "cancel-editor",
-                    MessageId::Cancel,
-                    tokens,
-                    cx.listener(|this, _, _, cx| {
-                        this.editor = None;
-                        cx.notify();
-                    }),
-                ))
-                .child(self.button(
-                    "save-editor",
-                    MessageId::Save,
-                    tokens,
-                    cx.listener(|this, _, _, cx| this.save_editor(cx)),
-                )),
-        );
-        Some(
-            div()
-                .absolute()
-                .inset_0()
-                .occlude()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(gpui::rgba(0x00000099))
-                .child(form)
-                .into_any_element(),
-        )
-    }
-
-    fn render_modal(
-        &self,
-        tokens: ThemeTokens,
-        cx: &mut Context<Self>,
-    ) -> Option<gpui::AnyElement> {
-        if let Some(editor) = self.render_editor(tokens, cx) {
-            return Some(editor);
+    fn requested_dialog(&self) -> Option<DialogPayload> {
+        let locale = self.locale;
+        if let Some(editor) = &self.editor {
+            let save_state = editor_save_state(self.saving_editor, editor.id);
+            return Some(DialogPayload {
+                identity: DialogIdentity {
+                    locale,
+                    kind: DialogIdentityKind::Editor {
+                        editor_id: editor.id,
+                        auth_method: editor.form.auth_method,
+                        remember: editor.form.remember,
+                        save_state,
+                        is_editing: editor.form.is_editing(),
+                    },
+                },
+                snapshot: DialogSnapshot::Editor(EditorDialogSnapshot {
+                    editor_id: editor.id,
+                    is_editing: editor.form.is_editing(),
+                    auth_method: editor.form.auth_method,
+                    remember: editor.form.remember,
+                    save_state,
+                    name: editor.name.clone(),
+                    host: editor.host.clone(),
+                    port: editor.port.clone(),
+                    username: editor.username.clone(),
+                    private_key_path: editor.private_key_path.clone(),
+                    secret: editor.secret.clone(),
+                }),
+            });
         }
         if let Some(action) = &self.confirm {
-            let (message, action_label) = match action {
-                ConfirmAction::DeleteProfile(_) => {
-                    (MessageId::ConfirmDeleteProfile, MessageId::Delete)
-                }
-                ConfirmAction::DeleteHost(_) => (MessageId::ConfirmDeleteHost, MessageId::Delete),
-                ConfirmAction::Quit => (MessageId::ConfirmQuit, MessageId::Quit),
-            };
-            return Some(self.confirm_modal(message, action_label, tokens, cx));
+            return Some(DialogPayload {
+                identity: DialogIdentity {
+                    locale,
+                    kind: DialogIdentityKind::Confirm(action.clone()),
+                },
+                snapshot: DialogSnapshot::Confirm(action.clone()),
+            });
         }
         let request = self.tabs.modals().current()?.clone();
-        let content = match request {
-            ModalRequest::Secret { tab_id } => div()
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .child(self.text(MessageId::CredentialRequired))
-                .child(
-                    div()
-                        .p(px(8.))
-                        .rounded(px(6.))
-                        .border_1()
-                        .border_color(rgb(tokens.border))
-                        .child(self.secret.clone()),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.))
-                        .child(self.button(
-                            "cancel-secret",
-                            MessageId::Cancel,
-                            tokens,
-                            cx.listener(move |this, _, _, cx| this.cancel_secret(tab_id, cx)),
-                        ))
-                        .child(self.button(
-                            "connect-once",
-                            MessageId::ConnectOnce,
-                            tokens,
-                            cx.listener(|this, _, _, cx| this.submit_secret(cx)),
-                        )),
-                ),
+        let kind = match &request {
             ModalRequest::HostKey {
-                tab_id,
-                prompt_id,
-                endpoint,
-                algorithm,
-                fingerprint_sha256,
-            } => {
-                let reject_id = prompt_id;
-                let accept_id = prompt_id;
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(self.text(MessageId::UnknownHostKey))
-                    .child(format!("{}:{}", endpoint.host, endpoint.port))
-                    .child(algorithm)
-                    .child(fingerprint_sha256)
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(8.))
-                            .child(self.button(
-                                "reject-host-key",
-                                MessageId::Reject,
-                                tokens,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.decide_host_key(
-                                        tab_id,
-                                        reject_id,
-                                        HostKeyDecision::Reject,
-                                        cx,
-                                    )
-                                }),
-                            ))
-                            .child(self.button(
-                                "accept-host-key",
-                                MessageId::AcceptAndStore,
-                                tokens,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.decide_host_key(
-                                        tab_id,
-                                        accept_id,
-                                        HostKeyDecision::AcceptAndStore,
-                                        cx,
-                                    )
-                                }),
-                            )),
-                    )
-            }
+                tab_id, prompt_id, ..
+            } => DialogIdentityKind::HostKey {
+                tab_id: *tab_id,
+                prompt_id: *prompt_id,
+            },
             ModalRequest::ChangedHostKey {
-                endpoint,
-                expected_sha256,
-                presented_sha256,
-                ..
-            } => div()
-                .flex()
-                .flex_col()
-                .gap(px(10.))
-                .child(self.text(MessageId::ChangedHostKey))
-                .child(format!("{}:{}", endpoint.host, endpoint.port))
-                .child(format!(
-                    "{}: {}",
-                    self.text(MessageId::ExpectedFingerprint),
-                    expected_sha256
-                ))
-                .child(format!(
-                    "{}: {}",
-                    self.text(MessageId::PresentedFingerprint),
-                    presented_sha256
-                ))
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.))
-                        .child(self.button(
-                            "close-changed-host-key",
-                            MessageId::Close,
-                            tokens,
-                            cx.listener(|this, _, _, cx| {
-                                this.tabs.modals_mut().complete_current();
-                                cx.notify();
-                            }),
-                        ))
-                        .child(self.button(
-                            "open-trusted-hosts",
-                            MessageId::OpenTrustedHosts,
-                            tokens,
-                            cx.listener(|this, _, _, cx| this.open_trusted_hosts(cx)),
-                        )),
-                ),
-            ModalRequest::ConfirmClose { tab_id } => div()
-                .flex()
-                .flex_col()
-                .gap(px(14.))
-                .child(self.text(MessageId::ConfirmCloseTab))
-                .child(
-                    div()
-                        .flex()
-                        .justify_end()
-                        .gap(px(8.))
-                        .child(self.button(
-                            "cancel-tab-close",
-                            MessageId::Cancel,
-                            tokens,
-                            cx.listener(|this, _, _, cx| this.cancel_tab_close(cx)),
-                        ))
-                        .child(self.button(
-                            "confirm-tab-close",
-                            MessageId::Close,
-                            tokens,
-                            cx.listener(move |this, _, _, cx| this.confirm_tab_close(tab_id, cx)),
-                        )),
-                ),
+                tab_id, request_id, ..
+            } => DialogIdentityKind::ChangedHostKey {
+                tab_id: *tab_id,
+                request_id: *request_id,
+            },
+            ModalRequest::Secret { tab_id } => DialogIdentityKind::Secret(*tab_id),
+            ModalRequest::ConfirmClose { tab_id } => DialogIdentityKind::ConfirmClose(*tab_id),
         };
-        Some(self.modal_surface(content, tokens))
+        Some(DialogPayload {
+            identity: DialogIdentity { locale, kind },
+            snapshot: DialogSnapshot::Modal {
+                request,
+                secret_input: self.secret.clone(),
+            },
+        })
     }
 
-    fn confirm_modal(
-        &self,
-        message: MessageId,
-        action_label: MessageId,
-        tokens: ThemeTokens,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        let content = div()
-            .flex()
-            .flex_col()
-            .gap(px(14.))
-            .child(self.text(message))
-            .child(
-                div()
-                    .flex()
-                    .justify_end()
-                    .gap(px(8.))
-                    .child(self.button(
-                        "cancel-confirm",
-                        MessageId::Cancel,
-                        tokens,
-                        cx.listener(|this, _, _, cx| {
-                            this.confirm = None;
-                            cx.notify();
-                        }),
-                    ))
-                    .child(self.button(
-                        "accept-confirm",
-                        action_label,
-                        tokens,
-                        cx.listener(|this, _, window, cx| this.perform_confirm(window, cx)),
-                    )),
-            );
-        self.modal_surface(content, tokens)
+    fn schedule_dialog_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let identity = self
+            .requested_dialog()
+            .map(|payload| payload.identity.kind.focus_identity());
+        cx.defer_in(window, move |this, window, cx| {
+            let current = this
+                .requested_dialog()
+                .map(|payload| payload.identity.kind.focus_identity());
+            if current != identity {
+                return;
+            }
+            if let Some(presenter) = &this.dialog_presenter {
+                presenter.update(cx, |presenter, cx| presenter.focus_initial(window, cx));
+            }
+        });
     }
 
-    fn modal_surface(&self, content: impl IntoElement, tokens: ThemeTokens) -> gpui::AnyElement {
-        div()
-            .absolute()
-            .inset_0()
-            .occlude()
-            .flex()
-            .items_center()
-            .justify_center()
-            .bg(gpui::rgba(0x00000099))
-            .track_focus(&self.modal_focus)
-            .child(
-                div()
-                    .w(px(520.))
-                    .p(px(24.))
-                    .rounded(px(12.))
-                    .border_1()
-                    .border_color(rgb(tokens.border))
-                    .bg(rgb(tokens.surface))
-                    .child(content),
-            )
-            .into_any_element()
+    fn sync_dialog_layer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let requested = self.requested_dialog();
+        match (requested, &self.dialog_presenter) {
+            (None, None) => {
+                if self.pending_terminal_focus {
+                    self.pending_terminal_focus = false;
+                    self.terminal_focus.focus(window);
+                }
+            }
+            (None, Some(_)) => {
+                window.close_dialog(cx);
+                self.dialog_presenter = None;
+                if self.pending_terminal_focus {
+                    self.pending_terminal_focus = false;
+                    self.terminal_focus.focus(window);
+                }
+                cx.notify();
+            }
+            (Some(payload), None) => {
+                let owner = cx.entity().downgrade();
+                let presenter = cx.new(|cx| DialogPresenter::new(owner, payload, cx));
+                let presenter_entity = presenter.clone();
+                self.dialog_presenter = Some(presenter);
+                window.open_dialog(cx, move |dialog, _window, cx| {
+                    let presenter = presenter_entity.clone();
+                    let width = presenter.read(cx).dialog_width();
+                    dialog
+                        .overlay_closable(false)
+                        .keyboard(false)
+                        .close_button(false)
+                        .width(width)
+                        .child(presenter)
+                });
+                self.schedule_dialog_focus(window, cx);
+            }
+            (Some(payload), Some(existing)) => {
+                let needs_focus = existing.read(cx).payload.identity.kind.focus_identity()
+                    != payload.identity.kind.focus_identity();
+                existing.update(cx, |presenter, cx| {
+                    presenter.payload = payload;
+                    cx.notify();
+                });
+                if needs_focus {
+                    self.schedule_dialog_focus(window, cx);
+                }
+            }
+        }
     }
 
-    fn sync_modal_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let overlay_open = self.editor.is_some() || self.confirm.is_some();
-        if overlay_open {
-            // The editor/confirm open handlers already placed focus; never
-            // steal it during render.
-            self.overlay_was_open = true;
+    fn cancel_confirm(&mut self, cx: &mut Context<Self>) {
+        self.confirm = None;
+        cx.notify();
+    }
+
+    fn close_changed_host_key(&mut self, tab_id: TabId, request_id: Uuid, cx: &mut Context<Self>) {
+        if self
+            .tabs
+            .modals_mut()
+            .complete_current_if(|request| request.is_changed_host_key_for(tab_id, request_id))
+            .is_none()
+        {
             return;
         }
-        if self.overlay_was_open {
-            self.overlay_was_open = false;
-            self.last_modal_signature = u8::MAX;
-        }
-        let signature = match self.tabs.modals().current() {
-            Some(ModalRequest::Secret { .. }) => 1,
-            Some(_) => 2,
-            None => 0,
-        };
-        if signature != self.last_modal_signature {
-            self.last_modal_signature = signature;
-            match signature {
-                1 => {
-                    self.secret.update(cx, |field, _| {
-                        field.focus_handle().focus(window);
-                    });
-                }
-                2 => self.modal_focus.focus(window),
-                _ => self.focus_handle.focus(window),
-            }
-        }
-        if self.pending_terminal_focus && signature == 0 {
-            self.pending_terminal_focus = false;
-            self.terminal_focus.focus(window);
-        }
-    }
-
-    fn button(
-        &self,
-        id: impl Into<gpui::ElementId>,
-        label: MessageId,
-        tokens: ThemeTokens,
-        listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> gpui::AnyElement {
-        let listener = Rc::new(listener);
-        let click_listener = listener.clone();
-        div()
-            .id(id)
-            .px(px(12.))
-            .py(px(8.))
-            .rounded(px(6.))
-            .border_1()
-            .border_color(rgb(tokens.border))
-            .cursor_pointer()
-            .tab_stop(true)
-            .hover(|element| element.bg(rgb(tokens.selection)))
-            .focus(|element| element.border_color(rgb(tokens.accent)))
-            .child(self.text(label))
-            .on_click(move |event, window, cx| click_listener(event, window, cx))
-            .on_key_down(move |event, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    listener(&ClickEvent::default(), window, cx);
-                    cx.stop_propagation();
-                }
-            })
-            .into_any_element()
+        cx.notify();
     }
 
     fn on_add_connection(
@@ -2540,14 +2287,6 @@ impl AppView {
             self.close_tab(id, cx);
         }
         cx.stop_propagation();
-    }
-
-    fn on_focus_next(&mut self, _: &FocusNext, window: &mut Window, _: &mut Context<Self>) {
-        window.focus_next();
-    }
-
-    fn on_focus_prev(&mut self, _: &FocusPrev, window: &mut Window, _: &mut Context<Self>) {
-        window.focus_prev();
     }
 
     fn on_terminal_tab(&mut self, _: &TerminalTab, _: &mut Window, cx: &mut Context<Self>) {
@@ -2600,8 +2339,521 @@ impl AppView {
     }
 }
 
-fn activation_key(event: &KeyDownEvent) -> bool {
-    matches!(event.keystroke.key.as_str(), "enter" | "space")
+struct DialogPresenter {
+    owner: WeakEntity<AppView>,
+    payload: DialogPayload,
+    focus: DialogFocusBoundary,
+}
+
+impl DialogPresenter {
+    fn new(owner: WeakEntity<AppView>, payload: DialogPayload, cx: &mut Context<Self>) -> Self {
+        Self {
+            owner,
+            payload,
+            focus: DialogFocusBoundary::new(cx),
+        }
+    }
+
+    fn text(&self, id: MessageId) -> &'static str {
+        Catalog::text(self.payload.identity.locale, id)
+    }
+
+    fn dialog_width(&self) -> Pixels {
+        match &self.payload.snapshot {
+            DialogSnapshot::Editor(_) => px(560.),
+            _ => px(520.),
+        }
+    }
+
+    fn focus_initial(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.payload.snapshot {
+            DialogSnapshot::Editor(editor) => {
+                editor.name.update(cx, |input, cx| input.focus(window, cx));
+                return;
+            }
+            DialogSnapshot::Modal {
+                request: ModalRequest::Secret { .. },
+                secret_input,
+            } => {
+                secret_input.update(cx, |input, cx| {
+                    input.set_value("", window, cx);
+                    input.focus(window, cx);
+                });
+                return;
+            }
+            _ => {}
+        }
+        // Non-input dialogs: land on the first/last real component by
+        // focusing the boundary anchor and advancing once.
+        self.focus.start.focus(window);
+        window.focus_next();
+    }
+
+    fn on_focus_next(&mut self, window: &mut Window, cx: &mut App) {
+        window.focus_next();
+        if !self.focus.contains_focused(window, cx) {
+            self.focus.start.focus(window);
+            window.focus_next();
+        }
+        cx.stop_propagation();
+    }
+
+    fn on_focus_prev(&mut self, window: &mut Window, cx: &mut App) {
+        window.focus_prev();
+        if !self.focus.contains_focused(window, cx) {
+            self.focus.end.focus(window);
+            window.focus_prev();
+        }
+        cx.stop_propagation();
+    }
+
+    fn render_editor(
+        &self,
+        editor: &EditorDialogSnapshot,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let text = |id: MessageId| self.text(id).to_owned();
+        let name_label = text(MessageId::Name);
+        let host_label = text(MessageId::Host);
+        let port_label = text(MessageId::Port);
+        let username_label = text(MessageId::Username);
+        let auth_label = text(MessageId::AuthMethod);
+        let private_key_label = text(MessageId::PrivateKey);
+        let password_label = text(MessageId::Password);
+        let passphrase_label = text(MessageId::Passphrase);
+        let remember_label = text(MessageId::Remember);
+        let agent_description = text(MessageId::AgentDescription);
+        let auth_index = match editor.auth_method {
+            AuthMethod::Password => 0,
+            AuthMethod::PrivateKey => 1,
+            AuthMethod::Agent => 2,
+        };
+        let secret_label = if editor.auth_method == AuthMethod::PrivateKey {
+            passphrase_label
+        } else {
+            password_label.clone()
+        };
+        let heading = if editor.is_editing {
+            text(MessageId::Edit)
+        } else {
+            text(MessageId::AddConnection)
+        };
+        // The snapshot carries the editor identity; assert the projection
+        // agrees with the dialog identity.
+        debug_assert!(matches!(
+            &self.payload.identity.kind,
+            DialogIdentityKind::Editor { editor_id, .. } if *editor_id == editor.editor_id
+        ));
+        let secret_is_visible = editor.auth_method != AuthMethod::Agent;
+        let cancel_listener = cx.listener(|this, _, _, cx| {
+            this.owner.update(cx, |app, cx| app.cancel_editor(cx)).ok();
+        });
+        let save_listener = cx.listener(|this, _, window, cx| {
+            this.owner
+                .update(cx, |app, cx| app.save_editor(window, cx))
+                .ok();
+        });
+        let browse_listener = cx.listener(|this, _, window, cx| {
+            this.owner
+                .update(cx, |app, cx| app.browse_private_key(window, cx))
+                .ok();
+        });
+        let auth_listener = cx.listener(|this, index, window, cx| {
+            let method = match *index {
+                1 => AuthMethod::PrivateKey,
+                2 => AuthMethod::Agent,
+                _ => AuthMethod::Password,
+            };
+            let _ = this
+                .owner
+                .update(cx, |app, cx| app.select_auth_method(method, window, cx));
+            if let DialogSnapshot::Editor(editor) = &mut this.payload.snapshot {
+                editor.auth_method = method;
+                let locale = this.payload.identity.locale;
+                let placeholder = if method == AuthMethod::PrivateKey {
+                    MessageId::Passphrase
+                } else {
+                    MessageId::Password
+                };
+                editor.secret.update(cx, |input, cx| {
+                    input.set_value("", window, cx);
+                    input.set_placeholder(Catalog::text(locale, placeholder), window, cx);
+                });
+            }
+            cx.notify();
+        });
+        let remember_listener = cx.listener(|this, checked, _, cx| {
+            let _ = this.owner.update(cx, |app, cx| app.toggle_remember(cx));
+            if let DialogSnapshot::Editor(editor) = &mut this.payload.snapshot {
+                editor.remember = *checked;
+            }
+            cx.notify();
+        });
+        let browse_button = Button::new("browse-private-key")
+            .label(text(MessageId::Browse))
+            .on_click(browse_listener);
+        v_form()
+            .w(px(560.))
+            .label_width(px(120.))
+            .child(
+                field().child(
+                    div()
+                        .text_size(px(20.))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .child(heading),
+                ),
+            )
+            .child(field().label(name_label).child(Input::new(&editor.name)))
+            .child(field().label(host_label).child(Input::new(&editor.host)))
+            .child(field().label(port_label).child(Input::new(&editor.port)))
+            .child(
+                field()
+                    .label(username_label)
+                    .child(Input::new(&editor.username)),
+            )
+            .child(
+                field().label(auth_label).child(
+                    RadioGroup::horizontal("editor-auth")
+                        .selected_index(Some(auth_index))
+                        .child(Radio::new("auth-password").label(password_label))
+                        .child(Radio::new("auth-private-key").label(private_key_label.clone()))
+                        .child(Radio::new("auth-agent").label(text(MessageId::Agent)))
+                        .on_click(auth_listener),
+                ),
+            )
+            .child(
+                field()
+                    .label(private_key_label)
+                    .visible(editor.auth_method == AuthMethod::PrivateKey)
+                    .child(
+                        h_flex()
+                            .gap(px(8.))
+                            .child(Input::new(&editor.private_key_path))
+                            .child(browse_button),
+                    ),
+            )
+            .child(
+                field()
+                    .label(secret_label)
+                    .visible(secret_is_visible)
+                    .child(Input::new(&editor.secret)),
+            )
+            .child(
+                field()
+                    .label(remember_label)
+                    .visible(secret_is_visible)
+                    .child(
+                        Checkbox::new("editor-remember")
+                            .checked(editor.remember)
+                            .on_click(remember_listener),
+                    ),
+            )
+            .child(
+                field().child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.))
+                        .child(
+                            Button::new("cancel-editor")
+                                .label(self.text(MessageId::Cancel))
+                                .on_click(cancel_listener),
+                        )
+                        .child(
+                            Button::new("save-editor")
+                                .label(self.text(MessageId::Save))
+                                .primary()
+                                .loading(editor.save_state == EditorSaveState::SavingThis)
+                                .disabled(editor.save_state != EditorSaveState::Idle)
+                                .on_click(save_listener),
+                        ),
+                ),
+            )
+            .when(editor.auth_method == AuthMethod::Agent, |form| {
+                form.child(
+                    field().child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(agent_description),
+                    ),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_confirm(&self, action: &ConfirmAction, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let (message, action_label) = match action {
+            ConfirmAction::DeleteProfile(_) => (MessageId::ConfirmDeleteProfile, MessageId::Delete),
+            ConfirmAction::DeleteHost(_) => (MessageId::ConfirmDeleteHost, MessageId::Delete),
+            ConfirmAction::Quit => (MessageId::ConfirmQuit, MessageId::Quit),
+        };
+        let cancel_listener = cx.listener(|this, _, _, cx| {
+            this.owner.update(cx, |app, cx| app.cancel_confirm(cx)).ok();
+        });
+        let accept_listener = cx.listener(move |this, _, window, cx| {
+            this.owner
+                .update(cx, |app, cx| app.perform_confirm(window, cx))
+                .ok();
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(14.))
+            .child(div().child(self.text(message)))
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.))
+                    .child(
+                        Button::new("cancel-confirm")
+                            .label(self.text(MessageId::Cancel))
+                            .on_click(cancel_listener),
+                    )
+                    .child(
+                        Button::new("accept-confirm")
+                            .label(self.text(action_label))
+                            .danger()
+                            .on_click(accept_listener),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_modal(
+        &self,
+        request: &ModalRequest,
+        secret_input: &Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        match request {
+            ModalRequest::Secret { tab_id } => {
+                let tab_id = *tab_id;
+                let secret_input = secret_input.clone();
+                let cancel_listener = cx.listener(move |this, _, window, cx| {
+                    this.owner
+                        .update(cx, |app, cx| app.cancel_secret(tab_id, window, cx))
+                        .ok();
+                });
+                let submit_listener = cx.listener(move |this, _, window, cx| {
+                    this.owner
+                        .update(cx, |app, cx| app.submit_secret(tab_id, window, cx))
+                        .ok();
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child(self.text(MessageId::CredentialRequired)),
+                    )
+                    .child(Input::new(&secret_input))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(8.))
+                            .child(
+                                Button::new("cancel-secret")
+                                    .label(self.text(MessageId::Cancel))
+                                    .on_click(cancel_listener),
+                            )
+                            .child(
+                                Button::new("connect-once")
+                                    .label(self.text(MessageId::ConnectOnce))
+                                    .primary()
+                                    .on_click(submit_listener),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            ModalRequest::HostKey {
+                tab_id,
+                prompt_id,
+                endpoint,
+                algorithm,
+                fingerprint_sha256,
+            } => {
+                let tab_id = *tab_id;
+                let prompt_id = *prompt_id;
+                let reject_listener = cx.listener(move |this, _, _, cx| {
+                    this.owner
+                        .update(cx, |app, cx| {
+                            app.decide_host_key(tab_id, prompt_id, HostKeyDecision::Reject, cx)
+                        })
+                        .ok();
+                });
+                let accept_listener = cx.listener(move |this, _, _, cx| {
+                    this.owner
+                        .update(cx, |app, cx| {
+                            app.decide_host_key(
+                                tab_id,
+                                prompt_id,
+                                HostKeyDecision::AcceptAndStore,
+                                cx,
+                            )
+                        })
+                        .ok();
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child(self.text(MessageId::UnknownHostKey)),
+                    )
+                    .child(format!("{}:{}", endpoint.host, endpoint.port))
+                    .child(algorithm.clone())
+                    .child(fingerprint_sha256.clone())
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(8.))
+                            .child(
+                                Button::new("reject-host-key")
+                                    .label(self.text(MessageId::Reject))
+                                    .danger()
+                                    .on_click(reject_listener),
+                            )
+                            .child(
+                                Button::new("accept-host-key")
+                                    .label(self.text(MessageId::AcceptAndStore))
+                                    .primary()
+                                    .on_click(accept_listener),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            ModalRequest::ChangedHostKey {
+                tab_id,
+                request_id,
+                endpoint,
+                expected_sha256,
+                presented_sha256,
+            } => {
+                let tab_id = *tab_id;
+                let request_id = *request_id;
+                let close_listener = cx.listener(move |this, _, _, cx| {
+                    this.owner
+                        .update(cx, |app, cx| {
+                            app.close_changed_host_key(tab_id, request_id, cx)
+                        })
+                        .ok();
+                });
+                let hosts_listener = cx.listener(move |this, _, _, cx| {
+                    this.owner
+                        .update(cx, |app, cx| app.open_trusted_hosts(tab_id, request_id, cx))
+                        .ok();
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(
+                        div()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child(self.text(MessageId::ChangedHostKey)),
+                    )
+                    .child(format!("{}:{}", endpoint.host, endpoint.port))
+                    .child(format!(
+                        "{}: {}",
+                        self.text(MessageId::ExpectedFingerprint),
+                        expected_sha256
+                    ))
+                    .child(format!(
+                        "{}: {}",
+                        self.text(MessageId::PresentedFingerprint),
+                        presented_sha256
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(8.))
+                            .child(
+                                Button::new("close-changed-host-key")
+                                    .label(self.text(MessageId::Close))
+                                    .on_click(close_listener),
+                            )
+                            .child(
+                                Button::new("open-trusted-hosts")
+                                    .label(self.text(MessageId::OpenTrustedHosts))
+                                    .primary()
+                                    .on_click(hosts_listener),
+                            ),
+                    )
+                    .into_any_element()
+            }
+            ModalRequest::ConfirmClose { tab_id } => {
+                let tab_id = *tab_id;
+                let cancel_listener = cx.listener(move |this, _, _, cx| {
+                    this.owner
+                        .update(cx, |app, cx| app.cancel_tab_close(tab_id, cx))
+                        .ok();
+                });
+                let confirm_listener = cx.listener(move |this, _, _, cx| {
+                    this.owner
+                        .update(cx, |app, cx| app.confirm_tab_close(tab_id, cx))
+                        .ok();
+                });
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(14.))
+                    .child(div().child(self.text(MessageId::ConfirmCloseTab)))
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap(px(8.))
+                            .child(
+                                Button::new("cancel-tab-close")
+                                    .label(self.text(MessageId::Cancel))
+                                    .on_click(cancel_listener),
+                            )
+                            .child(
+                                Button::new("confirm-tab-close")
+                                    .label(self.text(MessageId::Close))
+                                    .danger()
+                                    .on_click(confirm_listener),
+                            ),
+                    )
+                    .into_any_element()
+            }
+        }
+    }
+}
+
+impl Render for DialogPresenter {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let content = match &self.payload.snapshot {
+            DialogSnapshot::Editor(editor) => self.render_editor(editor, cx),
+            DialogSnapshot::Confirm(action) => self.render_confirm(action, cx),
+            DialogSnapshot::Modal {
+                request,
+                secret_input,
+            } => self.render_modal(request, secret_input, cx),
+        };
+        div()
+            .id("oxide-ssh-dialog")
+            .key_context("OxideSSHDialog")
+            .track_focus(&self.focus.scope)
+            .on_action(
+                cx.listener(|this, _: &DialogFocusNext, window, cx| this.on_focus_next(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &DialogFocusPrev, window, cx| this.on_focus_prev(window, cx)),
+            )
+            .child(div().track_focus(&self.focus.start))
+            .child(content)
+            .child(div().track_focus(&self.focus.end))
+    }
 }
 
 struct TerminalElement {
@@ -2702,7 +2954,7 @@ impl Element for TerminalElement {
         };
         let model = tab.terminal();
         let terminal_colors = view.theme.terminal_colors();
-        let selection_color = view.tokens().selection;
+        let selection_color = terminal_selection_color(view.theme);
         let content = model.renderable_content();
         let selection = content.selection;
         let cursor = content.cursor;
@@ -2937,22 +3189,24 @@ fn terminal_outline(
 
 impl Render for AppView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.refresh_preferences(window);
-        self.update_text_fields(cx);
-        self.sync_modal_focus(window, cx);
+        // The dialog layer must never be mutated while AppView is on the
+        // render stack; sync it on the next deferred pass.
+        cx.defer_in(window, |this, window, cx| {
+            this.sync_dialog_layer(window, cx)
+        });
+        self.refresh_preferences(window, cx);
         self.sync_status(cx);
-        let tokens = self.tokens();
         let body = if self.state.is_none() {
-            self.render_recovery(tokens, cx)
+            self.render_recovery(cx)
         } else {
             let main = match self.main_view {
-                MainView::Sessions => self.render_sessions(tokens, cx),
-                MainView::Settings => self.render_settings(tokens, cx),
+                MainView::Sessions => self.render_sessions(cx),
+                MainView::Settings => self.render_settings(cx),
             };
             div()
                 .size_full()
                 .flex()
-                .child(self.render_sidebar(tokens, cx))
+                .child(self.render_sidebar(cx))
                 .child(div().flex_1().h_full().child(main))
                 .into_any_element()
         };
@@ -2962,30 +3216,9 @@ impl Render for AppView {
                 .left(px(276.))
                 .bottom(px(14.))
                 .max_w(px(620.))
-                .p(px(10.))
-                .rounded(px(6.))
-                .bg(rgb(tokens.danger))
-                .text_color(rgb(0xffffff))
-                .flex()
-                .items_center()
-                .gap(px(10.))
-                .child(div().flex_1().child(self.text(message)))
                 .child(
-                    div()
-                        .id("dismiss-status")
-                        .cursor_pointer()
-                        .tab_stop(true)
-                        .focus(|element| element.bg(rgb(tokens.surface)))
-                        .text_color(rgb(0xffffff))
-                        .px(px(6.))
-                        .child("×")
-                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_status(cx)))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                            if activation_key(event) {
-                                this.dismiss_status(cx);
-                                cx.stop_propagation();
-                            }
-                        })),
+                    Alert::error("status-alert", self.text(message))
+                        .on_close(cx.listener(|this, _, _, cx| this.dismiss_status(cx))),
                 )
         });
         let bell = self.bell.then(|| {
@@ -2993,11 +3226,7 @@ impl Render for AppView {
                 .absolute()
                 .right(px(16.))
                 .bottom(px(14.))
-                .p(px(10.))
-                .rounded(px(6.))
-                .bg(rgb(tokens.accent))
-                .text_color(rgb(tokens.surface))
-                .child(self.text(MessageId::Bell))
+                .child(Alert::info("bell-alert", self.text(MessageId::Bell)))
         });
         div()
             .id("oxide-ssh-root")
@@ -3005,8 +3234,8 @@ impl Render for AppView {
             .relative()
             .key_context("OxideSSH")
             .track_focus(&self.focus_handle)
-            .bg(rgb(tokens.surface))
-            .text_color(rgb(tokens.text))
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
             .font_family(".SystemUIFont")
             .on_action(cx.listener(Self::on_add_connection))
             .on_action(cx.listener(Self::on_open_settings))
@@ -3015,14 +3244,12 @@ impl Render for AppView {
             .on_action(cx.listener(Self::on_close_tab))
             .on_action(cx.listener(Self::on_copy))
             .on_action(cx.listener(Self::on_paste))
-            .on_action(cx.listener(Self::on_focus_next))
-            .on_action(cx.listener(Self::on_focus_prev))
             .on_action(cx.listener(Self::on_terminal_tab))
             .on_action(cx.listener(Self::on_terminal_shift_tab))
             .child(body)
             .children(status)
             .children(bell)
-            .children(self.render_modal(tokens, cx))
+            .children(Root::render_dialog_layer(window, cx))
     }
 }
 
@@ -3234,6 +3461,15 @@ fn disconnect_reason_message_id(reason: DisconnectReason) -> MessageId {
     }
 }
 
+/// Selection tint for the custom terminal renderer, independent of the
+/// component widget theme.
+fn terminal_selection_color(theme: ResolvedTheme) -> u32 {
+    match theme {
+        ResolvedTheme::Dark => 0x315a78,
+        ResolvedTheme::Light => 0xb8d8f0,
+    }
+}
+
 trait RgbColorExt {
     fn to_hex(self) -> u32;
 }
@@ -3241,5 +3477,62 @@ trait RgbColorExt {
 impl RgbColorExt for oxide_ssh_terminal::RgbColor {
     fn to_hex(self) -> u32 {
         ((self.red as u32) << 16) | ((self.green as u32) << 8) | self.blue as u32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_save_state_distinguishes_current_and_blocked_editors() {
+        let current = EditorId(Uuid::new_v4());
+        let other = EditorId(Uuid::new_v4());
+
+        assert_eq!(editor_save_state(None, current), EditorSaveState::Idle);
+        assert_eq!(
+            editor_save_state(Some(current), current),
+            EditorSaveState::SavingThis
+        );
+        assert_eq!(
+            editor_save_state(Some(other), current),
+            EditorSaveState::BlockedByOther
+        );
+    }
+
+    #[test]
+    fn editor_focus_identity_survives_payload_updates() {
+        let editor_id = EditorId(Uuid::new_v4());
+        let initial = DialogIdentityKind::Editor {
+            editor_id,
+            auth_method: AuthMethod::Password,
+            remember: false,
+            save_state: EditorSaveState::Idle,
+            is_editing: false,
+        };
+        let updated = DialogIdentityKind::Editor {
+            editor_id,
+            auth_method: AuthMethod::PrivateKey,
+            remember: true,
+            save_state: EditorSaveState::SavingThis,
+            is_editing: false,
+        };
+
+        assert_eq!(initial.focus_identity(), updated.focus_identity());
+    }
+
+    #[test]
+    fn request_focus_identity_requires_the_exact_request() {
+        let tab_id = TabId::new();
+        let first = DialogIdentityKind::HostKey {
+            tab_id,
+            prompt_id: Uuid::new_v4(),
+        };
+        let second = DialogIdentityKind::HostKey {
+            tab_id,
+            prompt_id: Uuid::new_v4(),
+        };
+
+        assert_ne!(first.focus_identity(), second.focus_identity());
     }
 }
