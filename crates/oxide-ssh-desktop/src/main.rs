@@ -1,3 +1,6 @@
+// Prevent an extra console window when launching on Windows.
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 use directories::ProjectDirs;
 use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
 use gpui_component::Root;
