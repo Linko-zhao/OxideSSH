@@ -113,6 +113,7 @@ pub fn init(cx: &mut App) {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MainView {
+    Workspace,
     Sessions,
     Settings,
 }
@@ -457,7 +458,7 @@ impl AppView {
             confirm: None,
             saving_editor: None,
             dialog_presenter: None,
-            main_view: MainView::Sessions,
+            main_view: MainView::Workspace,
             locale,
             system_locale,
             theme,
@@ -1322,6 +1323,7 @@ impl AppView {
         };
         let id = tabs[next].id();
         self.tabs.set_active(id);
+        self.main_view = MainView::Sessions;
         cx.notify();
     }
 
@@ -1624,117 +1626,75 @@ impl AppView {
             .into_any_element()
     }
 
-    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let query = self.search.read(cx).value().to_string();
-        let Some(state) = &mut self.state else {
-            return div().into_any_element();
-        };
-        state.set_search_query(query);
-        let profiles: Vec<_> = state.filtered_profiles().into_iter().cloned().collect();
-        let empty_message = if state.profiles().is_empty() {
-            MessageId::NoConnections
+    fn nav_item(
+        &self,
+        id: &'static str,
+        icon: IconName,
+        label: &'static str,
+        active: bool,
+        cx: &App,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = cx.theme();
+        let item = h_flex()
+            .id(id)
+            .items_center()
+            .gap(px(10.))
+            .px(px(10.))
+            .py(px(8.))
+            .rounded(px(8.))
+            .text_sm()
+            .child(Icon::new(icon).size(px(16.)))
+            .child(label);
+        if active {
+            item.bg(theme.accent).text_color(theme.accent_foreground)
         } else {
-            MessageId::NoSearchResults
-        };
-        let mut list = div()
-            .id("profile-list")
-            .flex_1()
-            .overflow_y_scroll()
-            .flex()
-            .flex_col()
-            .gap(px(6.));
-        if profiles.is_empty() {
-            list = list.child(
-                div()
-                    .p(px(12.))
-                    .text_sm()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(self.text(empty_message)),
-            );
+            let hover_bg = theme.list_hover;
+            item.text_color(theme.muted_foreground)
+                .hover(move |style| style.bg(hover_bg))
         }
-        for profile in profiles {
-            let profile_for_connect = profile.clone();
-            let profile_for_edit = profile.clone();
-            let profile_for_delete = profile.clone();
-            let endpoint = format!(
-                "{}@{}:{}",
-                profile.username, profile.endpoint.host, profile.endpoint.port
-            );
-            let status = self
-                .profile_status(profile.id)
-                .map(|status| status.to_owned());
-            let edit_label = self.text(MessageId::Edit).to_owned();
-            let delete_label = self.text(MessageId::Delete).to_owned();
-            let edit_id = SharedString::from(format!("edit-{}", profile.id.0));
-            let delete_id = SharedString::from(format!("delete-{}", profile.id.0));
-            let view = cx.entity();
-            list = list.child(
-                ListItem::new(SharedString::from(format!("profile-{}", profile.id.0)))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.))
-                            .child(profile.name.clone())
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(endpoint),
-                            )
-                            .when_some(status, |element, status| {
-                                element.child(
-                                    div().text_xs().text_color(cx.theme().primary).child(status),
-                                )
-                            }),
-                    )
-                    .suffix(move |_, _| {
-                        let edit_view = view.clone();
-                        let delete_view = view.clone();
-                        let edit_profile = profile_for_edit.clone();
-                        let delete_profile = profile_for_delete.clone();
-                        h_flex()
-                            .gap(px(6.))
-                            .child(
-                                Button::new(edit_id.clone())
-                                    .label(edit_label.clone())
-                                    .ghost()
-                                    .compact()
-                                    .on_click(move |_, window, cx| {
-                                        edit_view.update(cx, |this, cx| {
-                                            cx.stop_propagation();
-                                            this.show_edit_connection(
-                                                edit_profile.clone(),
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                    }),
-                            )
-                            .child(
-                                Button::new(delete_id.clone())
-                                    .label(delete_label.clone())
-                                    .ghost()
-                                    .compact()
-                                    .on_click(move |_, _, cx| {
-                                        delete_view.update(cx, |this, cx| {
-                                            cx.stop_propagation();
-                                            this.confirm = Some(ConfirmAction::DeleteProfile(
-                                                delete_profile.id,
-                                            ));
-                                            cx.notify();
-                                        });
-                                    }),
-                            )
-                            .into_any_element()
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.connect_profile(profile_for_connect.clone(), window, cx)
-                    })),
+    }
+
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let workspace_active = self.main_view == MainView::Workspace;
+        let settings_active = self.main_view == MainView::Settings;
+        let placeholder_items = [
+            ("nav-keychain", IconName::Asterisk, MessageId::Keychain),
+            (
+                "nav-port-forwarding",
+                IconName::ArrowRight,
+                MessageId::PortForwarding,
+            ),
+            ("nav-snippets", IconName::File, MessageId::Snippets),
+            (
+                "nav-known-hosts",
+                IconName::CircleCheck,
+                MessageId::KnownHosts,
+            ),
+            ("nav-logs", IconName::BookOpen, MessageId::Logs),
+        ];
+        let mut nav = div().flex().flex_col().gap(px(4.));
+        nav = nav.child(
+            self.nav_item(
+                "nav-hosts",
+                IconName::Globe,
+                self.text(MessageId::Hosts),
+                workspace_active,
+                cx,
+            )
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.main_view = MainView::Workspace;
+                cx.notify();
+            })),
+        );
+        for (id, icon, label) in placeholder_items {
+            nav = nav.child(
+                self.nav_item(id, icon, self.text(label), false, cx)
+                    .opacity(0.45),
             );
         }
         div()
-            .w(px(260.))
+            .w(px(200.))
             .h_full()
             .flex()
             .flex_col()
@@ -1745,36 +1705,322 @@ impl AppView {
             .bg(cx.theme().background)
             .child(
                 div()
+                    .px(px(10.))
+                    .py(px(8.))
+                    .text_size(px(18.))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child(self.text(MessageId::AppName)),
+            )
+            .child(nav)
+            .child(div().flex_1())
+            .child(
+                self.nav_item(
+                    "nav-settings",
+                    IconName::Settings,
+                    self.text(MessageId::Settings),
+                    settings_active,
+                    cx,
+                )
+                .cursor_pointer()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.main_view = MainView::Settings;
+                    cx.notify();
+                })),
+            )
+            .into_any_element()
+    }
+
+    fn render_host_card(
+        &mut self,
+        profile: ConnectionProfile,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        const PALETTE: [u32; 8] = [
+            0x00f9_7316,
+            0x00ea_b308,
+            0x00ef_4444,
+            0x003b_82f6,
+            0x008b_5cf6,
+            0x00ec_4899,
+            0x0022_c55e,
+            0x0014_b8a6,
+        ];
+        let hash: usize = profile
+            .id
+            .0
+            .as_bytes()
+            .iter()
+            .map(|byte| *byte as usize)
+            .sum();
+        let tile_color = rgb(PALETTE[hash % PALETTE.len()]);
+        let initial: String = profile
+            .name
+            .trim()
+            .chars()
+            .next()
+            .map(|ch| ch.to_uppercase().collect())
+            .unwrap_or_else(|| "?".into());
+        let endpoint = format!(
+            "{}@{}:{}",
+            profile.username, profile.endpoint.host, profile.endpoint.port
+        );
+        let status = self
+            .profile_status(profile.id)
+            .map(|status| status.to_owned());
+        let edit_label = self.text(MessageId::Edit).to_owned();
+        let delete_label = self.text(MessageId::Delete).to_owned();
+        let edit_id = SharedString::from(format!("edit-{}", profile.id.0));
+        let delete_id = SharedString::from(format!("delete-{}", profile.id.0));
+        let profile_for_connect = profile.clone();
+        let profile_for_edit = profile.clone();
+        let profile_for_delete = profile.clone();
+        let view = cx.entity();
+        let theme = cx.theme();
+        let border = theme.border;
+        let hover_border = theme.primary;
+        let card_bg = theme.secondary;
+        let muted_foreground = theme.muted_foreground;
+        div()
+            .id(SharedString::from(format!("host-card-{}", profile.id.0)))
+            .w(px(300.))
+            .p(px(14.))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(border)
+            .bg(card_bg)
+            .cursor_pointer()
+            .hover(move |style| style.border_color(hover_border))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.connect_profile(profile_for_connect.clone(), window, cx)
+            }))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .size(px(36.))
+                            .flex_none()
+                            .rounded(px(8.))
+                            .bg(tile_color)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(rgb(0x00ff_ffff))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child(initial),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.))
+                            .child(
+                                div()
+                                    .whitespace_nowrap()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_sm()
+                                    .child(profile.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .whitespace_nowrap()
+                                    .text_xs()
+                                    .text_color(muted_foreground)
+                                    .child(endpoint),
+                            ),
+                    ),
+            )
+            .child(
+                div()
                     .flex()
                     .items_center()
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(20.))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .child(self.text(MessageId::AppName)),
+                            .text_xs()
+                            .text_color(cx.theme().primary)
+                            .child(status.unwrap_or_default()),
                     )
                     .child(
-                        Button::new("settings")
-                            .label(self.text(MessageId::Settings))
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.main_view = MainView::Settings;
-                                cx.notify();
-                            })),
+                        h_flex()
+                            .gap(px(6.))
+                            .child(
+                                Button::new(edit_id)
+                                    .label(edit_label)
+                                    .ghost()
+                                    .compact()
+                                    .on_click(move |_, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            cx.stop_propagation();
+                                            this.show_edit_connection(
+                                                profile_for_edit.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                    }),
+                            )
+                            .child({
+                                let view = cx.entity();
+                                Button::new(delete_id)
+                                    .label(delete_label)
+                                    .ghost()
+                                    .compact()
+                                    .on_click(move |_, _, cx| {
+                                        view.update(cx, |this, cx| {
+                                            cx.stop_propagation();
+                                            this.confirm = Some(ConfirmAction::DeleteProfile(
+                                                profile_for_delete.id,
+                                            ));
+                                            cx.notify();
+                                        });
+                                    })
+                            }),
                     ),
             )
-            .child(Input::new(&self.search).prefix(Icon::new(IconName::Search)))
+            .into_any_element()
+    }
+
+    fn render_group_card(&self, host_count: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let theme = cx.theme();
+        let border = theme.border;
+        let card_bg = theme.secondary;
+        let tile_bg = theme.primary;
+        let muted_foreground = theme.muted_foreground;
+        div()
+            .w(px(300.))
+            .p(px(14.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(border)
+            .bg(card_bg)
+            .flex()
+            .items_center()
+            .gap(px(12.))
             .child(
-                Button::new("add-connection")
-                    .label(self.text(MessageId::AddConnection))
-                    .icon(IconName::Plus)
-                    .primary()
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.show_add_connection(window, cx)),
+                div()
+                    .size(px(36.))
+                    .flex_none()
+                    .rounded(px(8.))
+                    .bg(tile_bg)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(rgb(0x00ff_ffff))
+                    .child(Icon::new(IconName::Folder).size(px(18.))),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_sm()
+                            .child(self.text(MessageId::AllHosts)),
+                    )
+                    .child(div().text_xs().text_color(muted_foreground).child(format!(
+                        "{} {}",
+                        host_count,
+                        self.text(MessageId::Hosts)
+                    ))),
+            )
+            .into_any_element()
+    }
+
+    fn render_workspace(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let query = self.search.read(cx).value().to_string();
+        let Some(state) = &mut self.state else {
+            return div().into_any_element();
+        };
+        state.set_search_query(query);
+        let profiles: Vec<_> = state.filtered_profiles().into_iter().cloned().collect();
+        let total_profiles = state.profiles().len();
+        let empty_message = if total_profiles == 0 {
+            MessageId::NoConnections
+        } else {
+            MessageId::NoSearchResults
+        };
+        let is_empty = profiles.is_empty();
+        let mut grid = div().flex().flex_wrap().gap(px(12.));
+        for profile in profiles {
+            grid = grid.child(self.render_host_card(profile, cx));
+        }
+        let content = if is_empty {
+            div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(cx.theme().muted_foreground)
+                .child(self.text(empty_message))
+                .into_any_element()
+        } else {
+            div()
+                .id("workspace-hosts")
+                .size_full()
+                .overflow_y_scroll()
+                .child(grid)
+                .into_any_element()
+        };
+        let groups_section = (total_profiles > 0).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(10.))
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(self.text(MessageId::Groups)),
+                )
+                .child(self.render_group_card(total_profiles, cx))
+        });
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .gap(px(18.))
+            .p(px(20.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        Button::new("add-connection")
+                            .label(self.text(MessageId::NewHost))
+                            .icon(IconName::Plus)
+                            .primary()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.show_add_connection(window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .w(px(280.))
+                            .child(Input::new(&self.search).prefix(Icon::new(IconName::Search))),
                     ),
             )
-            .child(list)
+            .children(groups_section)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(self.text(MessageId::Hosts)),
+            )
+            .child(div().flex_1().child(content))
             .into_any_element()
     }
 
@@ -1788,17 +2034,9 @@ impl AppView {
         Some(self.text(tab_state_message_id(tab.state())))
     }
 
-    fn render_sessions(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        if self.tabs.tabs().is_empty() {
-            return div()
-                .size_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_color(cx.theme().muted_foreground)
-                .child(self.text(MessageId::SelectConnection))
-                .into_any_element();
-        }
+    /// Permanent top tab bar: index 0 is the always-present Workspace tab;
+    /// each open connection follows as its own closable tab.
+    fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let active = self.tabs.active();
         let tab_data: Vec<_> = self
             .tabs
@@ -1806,48 +2044,78 @@ impl AppView {
             .iter()
             .map(|tab| (tab.id(), tab.profile().name.clone(), *tab.state()))
             .collect();
-        let selected_index = tab_data.iter().position(|(id, _, _)| Some(*id) == active);
-        let tab_ids: Vec<_> = tab_data.iter().map(|(id, _, _)| *id).collect();
         let theme = cx.theme();
-        let component_tabs = tab_data.into_iter().map(|(id, name, state)| {
-            let dot_color = match state {
-                TabState::Connected => theme.primary,
-                TabState::Disconnected { .. } => theme.danger,
-                TabState::AwaitingHostKey | TabState::AwaitingSecret | TabState::Connecting => {
-                    theme.muted
-                }
-            };
+        let dot = |state: &TabState| match state {
+            TabState::Connected => theme.primary,
+            TabState::Disconnected { .. } => theme.danger,
+            TabState::AwaitingHostKey | TabState::AwaitingSecret | TabState::Connecting => {
+                theme.muted
+            }
+        };
+        let mut component_tabs = vec![
             Tab::new()
-                .label(name)
-                .prefix(div().size(px(8.)).rounded_full().bg(dot_color))
-                .suffix(
-                    Button::new(SharedString::from(format!("close-{id:?}")))
-                        .label("×")
-                        .ghost()
-                        .compact()
-                        .on_click(cx.listener(move |this, _, _, cx| this.close_tab(id, cx))),
-                )
-        });
+                .label(self.text(MessageId::Workspace))
+                .prefix(Icon::new(IconName::LayoutDashboard).size(px(14.))),
+        ];
+        for (id, name, state) in &tab_data {
+            let id = *id;
+            component_tabs.push(
+                Tab::new()
+                    .label(name.clone())
+                    .prefix(div().size(px(8.)).rounded_full().bg(dot(state)))
+                    .suffix(
+                        Button::new(SharedString::from(format!("close-{id:?}")))
+                            .label("×")
+                            .ghost()
+                            .compact()
+                            .on_click(cx.listener(move |this, _, _, cx| this.close_tab(id, cx))),
+                    ),
+            );
+        }
+        let selected_index = match self.main_view {
+            MainView::Sessions if !tab_data.is_empty() => tab_data
+                .iter()
+                .position(|(id, _, _)| Some(*id) == active)
+                .map(|index| index + 1),
+            // Sessions with no open connections renders the workspace.
+            MainView::Workspace | MainView::Sessions => Some(0),
+            MainView::Settings => None,
+        };
+        let tab_ids: Vec<_> = tab_data.iter().map(|(id, _, _)| *id).collect();
         let mut tab_bar = TabBar::new("tab-strip")
             .h(px(40.))
             .children(component_tabs)
             .on_click(cx.listener(move |this, index, _, cx| {
-                if let Some(id) = tab_ids.get(*index) {
+                if *index == 0 {
+                    this.main_view = MainView::Workspace;
+                } else if let Some(id) = tab_ids.get(*index - 1) {
                     this.tabs.set_active(*id);
-                    cx.notify();
+                    this.main_view = MainView::Sessions;
                 }
-            }));
+                cx.notify();
+            }))
+            .suffix(
+                Button::new("new-tab")
+                    .icon(IconName::Plus)
+                    .ghost()
+                    .compact()
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.show_add_connection(window, cx)),
+                    ),
+            );
         if let Some(index) = selected_index {
             tab_bar = tab_bar.selected_index(index);
         }
-        let body = self.render_active_tab(cx);
         div()
-            .size_full()
-            .flex()
-            .flex_col()
+            .flex_none()
+            .border_b_1()
+            .border_color(cx.theme().border)
             .child(tab_bar)
-            .child(body)
             .into_any_element()
+    }
+
+    fn render_sessions(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.render_active_tab(cx)
     }
 
     fn render_active_tab(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -2032,10 +2300,10 @@ impl AppView {
                             .child(self.text(MessageId::Settings)),
                     )
                     .child(
-                        Button::new("back-to-sessions")
-                            .label(self.text(MessageId::Sessions))
+                        Button::new("back-to-workspace")
+                            .label(self.text(MessageId::Workspace))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.main_view = MainView::Sessions;
+                                this.main_view = MainView::Workspace;
                                 cx.notify();
                             })),
                     ),
@@ -3200,20 +3468,29 @@ impl Render for AppView {
             self.render_recovery(cx)
         } else {
             let main = match self.main_view {
+                MainView::Workspace => self.render_workspace(cx),
+                MainView::Sessions if self.tabs.tabs().is_empty() => self.render_workspace(cx),
                 MainView::Sessions => self.render_sessions(cx),
                 MainView::Settings => self.render_settings(cx),
             };
             div()
                 .size_full()
                 .flex()
-                .child(self.render_sidebar(cx))
-                .child(div().flex_1().h_full().child(main))
+                .flex_col()
+                .child(self.render_tab_strip(cx))
+                .child(
+                    div()
+                        .flex_1()
+                        .flex()
+                        .child(self.render_sidebar(cx))
+                        .child(div().flex_1().h_full().child(main)),
+                )
                 .into_any_element()
         };
         let status = self.status_message.map(|message| {
             div()
                 .absolute()
-                .left(px(276.))
+                .left(px(216.))
                 .bottom(px(14.))
                 .max_w(px(620.))
                 .child(
