@@ -2052,51 +2052,45 @@ impl AppView {
                 theme.muted
             }
         };
-        let mut component_tabs = vec![Tab::new().w(px(240.)).child(
-            div()
-                .w_full()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(Icon::new(IconName::LayoutDashboard).size(px(14.)))
-                .child(self.text(MessageId::Workspace)),
-        )];
+        let mut component_tabs = vec![
+            Tab::new().w(px(240.)).child(
+                div()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(Icon::new(IconName::LayoutDashboard).size(px(14.)))
+                    .child(self.text(MessageId::Workspace)),
+            ),
+        ];
         for (id, name, state) in &tab_data {
             let id = *id;
             component_tabs.push(
-                Tab::new()
-                    .w(px(240.))
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .gap_2()
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .size(px(8.))
-                                            .rounded_full()
-                                            .flex_none()
-                                            .bg(dot(state)),
-                                    )
-                                    .child(SharedString::from(name.clone())),
-                            )
-                            .child(
-                                Button::new(SharedString::from(format!("close-{id:?}")))
-                                    .label("×")
-                                    .ghost()
-                                    .compact()
-                                    .flex_none()
-                                    .on_click(
-                                        cx.listener(move |this, _, _, cx| this.close_tab(id, cx)),
-                                    ),
-                            ),
-                    ),
+                Tab::new().w(px(240.)).child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .overflow_hidden()
+                                .child(div().size(px(8.)).rounded_full().flex_none().bg(dot(state)))
+                                .child(SharedString::from(name.clone())),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("close-{id:?}")))
+                                .label("×")
+                                .ghost()
+                                .compact()
+                                .flex_none()
+                                .on_click(
+                                    cx.listener(move |this, _, _, cx| this.close_tab(id, cx)),
+                                ),
+                        ),
+                ),
             );
         }
         let selected_index = match self.main_view {
