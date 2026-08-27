@@ -2083,7 +2083,7 @@ impl AppView {
         };
         let tab_ids: Vec<_> = tab_data.iter().map(|(id, _, _)| *id).collect();
         let mut tab_bar = TabBar::new("tab-strip")
-            .h(px(40.))
+            .pill()
             .children(component_tabs)
             .on_click(cx.listener(move |this, index, _, cx| {
                 if *index == 0 {
@@ -2108,6 +2108,8 @@ impl AppView {
         }
         div()
             .flex_none()
+            .px(px(8.))
+            .py(px(6.))
             .border_b_1()
             .border_color(cx.theme().border)
             .child(tab_bar)
@@ -3464,6 +3466,8 @@ impl Render for AppView {
         });
         self.refresh_preferences(window, cx);
         self.sync_status(cx);
+        let sidebar_visible = self.main_view == MainView::Workspace
+            || (self.main_view == MainView::Sessions && self.tabs.tabs().is_empty());
         let body = if self.state.is_none() {
             self.render_recovery(cx)
         } else {
@@ -3482,7 +3486,9 @@ impl Render for AppView {
                     div()
                         .flex_1()
                         .flex()
-                        .child(self.render_sidebar(cx))
+                        .when(sidebar_visible, |element| {
+                            element.child(self.render_sidebar(cx))
+                        })
                         .child(div().flex_1().h_full().child(main)),
                 )
                 .into_any_element()
@@ -3490,7 +3496,7 @@ impl Render for AppView {
         let status = self.status_message.map(|message| {
             div()
                 .absolute()
-                .left(px(216.))
+                .left(px(if sidebar_visible { 216. } else { 16. }))
                 .bottom(px(14.))
                 .max_w(px(620.))
                 .child(
