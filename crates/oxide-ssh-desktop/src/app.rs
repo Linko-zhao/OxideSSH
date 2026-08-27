@@ -2052,23 +2052,50 @@ impl AppView {
                 theme.muted
             }
         };
-        let mut component_tabs = vec![
-            Tab::new()
-                .label(self.text(MessageId::Workspace))
-                .prefix(Icon::new(IconName::LayoutDashboard).size(px(14.))),
-        ];
+        let mut component_tabs = vec![Tab::new().w(px(240.)).child(
+            div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(Icon::new(IconName::LayoutDashboard).size(px(14.)))
+                .child(self.text(MessageId::Workspace)),
+        )];
         for (id, name, state) in &tab_data {
             let id = *id;
             component_tabs.push(
                 Tab::new()
-                    .label(name.clone())
-                    .prefix(div().size(px(8.)).rounded_full().bg(dot(state)))
-                    .suffix(
-                        Button::new(SharedString::from(format!("close-{id:?}")))
-                            .label("×")
-                            .ghost()
-                            .compact()
-                            .on_click(cx.listener(move |this, _, _, cx| this.close_tab(id, cx))),
+                    .w(px(240.))
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap_2()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .size(px(8.))
+                                            .rounded_full()
+                                            .flex_none()
+                                            .bg(dot(state)),
+                                    )
+                                    .child(SharedString::from(name.clone())),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!("close-{id:?}")))
+                                    .label("×")
+                                    .ghost()
+                                    .compact()
+                                    .flex_none()
+                                    .on_click(
+                                        cx.listener(move |this, _, _, cx| this.close_tab(id, cx)),
+                                    ),
+                            ),
                     ),
             );
         }
@@ -2083,7 +2110,7 @@ impl AppView {
         };
         let tab_ids: Vec<_> = tab_data.iter().map(|(id, _, _)| *id).collect();
         let mut tab_bar = TabBar::new("tab-strip")
-            .pill()
+            .segmented()
             .children(component_tabs)
             .on_click(cx.listener(move |this, index, _, cx| {
                 if *index == 0 {
