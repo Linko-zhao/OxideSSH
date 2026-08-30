@@ -11,7 +11,9 @@ pub(super) fn is_dark(appearance: WindowAppearance) -> bool {
     )
 }
 
-pub(super) fn credential_reference(auth: &AuthConfig) -> Option<&oxide_ssh_core::model::CredentialRef> {
+pub(super) fn credential_reference(
+    auth: &AuthConfig,
+) -> Option<&oxide_ssh_core::model::CredentialRef> {
     match auth {
         AuthConfig::Password { credential_ref } => credential_ref.as_ref(),
         AuthConfig::PrivateKey { passphrase_ref, .. } => passphrase_ref.as_ref(),

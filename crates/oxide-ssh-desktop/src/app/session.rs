@@ -1,9 +1,9 @@
-use super::*;
 use super::dialog::ConfirmAction;
 use super::messages::{
     credential_reference, local_error_message_id, requires_one_time_secret,
     session_error_message_id, transaction_error_message_id,
 };
+use super::*;
 
 const OUTPUT_COALESCE_BYTES: usize = 64 * 1024;
 
@@ -527,7 +527,12 @@ impl AppView {
         cx.notify();
     }
 
-    pub(super) fn open_trusted_hosts(&mut self, tab_id: TabId, request_id: Uuid, cx: &mut Context<Self>) {
+    pub(super) fn open_trusted_hosts(
+        &mut self,
+        tab_id: TabId,
+        request_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .tabs
             .modals_mut()
@@ -540,7 +545,12 @@ impl AppView {
         cx.notify();
     }
 
-    pub(super) fn cancel_secret(&mut self, tab_id: TabId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn cancel_secret(
+        &mut self,
+        tab_id: TabId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self
             .tabs
             .modals_mut()
@@ -553,5 +563,4 @@ impl AppView {
         self.tabs.remove(tab_id);
         cx.notify();
     }
-
 }

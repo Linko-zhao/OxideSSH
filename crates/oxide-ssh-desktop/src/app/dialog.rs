@@ -1,5 +1,5 @@
-use super::*;
 use super::editor::{EditorId, EditorSaveState, editor_save_state};
+use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ConfirmAction {
@@ -785,7 +785,6 @@ impl AppView {
         }
         cx.notify();
     }
-
 }
 
 #[cfg(test)]
@@ -827,5 +826,4 @@ mod tests {
 
         assert_ne!(first.focus_identity(), second.focus_identity());
     }
-
 }

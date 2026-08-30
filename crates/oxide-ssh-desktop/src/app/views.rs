@@ -1,7 +1,7 @@
-use super::*;
 use super::dialog::ConfirmAction;
 use super::messages::{disconnect_reason_message_id, tab_state_message_id};
 use super::terminal::{RgbColorExt, TERMINAL_FONT, TerminalElement};
+use super::*;
 
 impl AppView {
     pub(super) fn render_recovery(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -794,5 +794,4 @@ impl AppView {
             .child(GroupBox::new().title(trusted_label).child(trusted))
             .into_any_element()
     }
-
 }

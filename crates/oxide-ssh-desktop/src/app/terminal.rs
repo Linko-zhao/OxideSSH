@@ -1,5 +1,5 @@
-use super::*;
 use super::messages::local_error_message_id;
+use super::*;
 
 #[cfg(target_os = "macos")]
 pub(super) const TERMINAL_FONT: &str = "Menlo";
@@ -669,7 +669,12 @@ impl AppView {
         }
     }
 
-    pub(super) fn terminal_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+    pub(super) fn terminal_mouse_up(
+        &mut self,
+        _: &MouseUpEvent,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) {
         self.terminal_selecting = false;
     }
 
@@ -694,5 +699,4 @@ impl AppView {
             cx.notify();
         }
     }
-
 }

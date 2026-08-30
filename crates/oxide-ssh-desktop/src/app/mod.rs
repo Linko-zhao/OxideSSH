@@ -52,8 +52,7 @@ use crate::{
 mod messages;
 
 use self::messages::{
-    form_error_message_id, is_dark,
-    local_error_message_id, session_error_message_id,
+    form_error_message_id, is_dark, local_error_message_id, session_error_message_id,
     system_locale, transaction_error_message_id,
 };
 
@@ -660,4 +659,3 @@ impl Drop for AppView {
 }
 
 const STATUS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
-

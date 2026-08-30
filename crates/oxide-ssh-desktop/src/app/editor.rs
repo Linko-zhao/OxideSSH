@@ -244,7 +244,6 @@ impl AppView {
         }
         cx.notify();
     }
-
 }
 
 #[cfg(test)]
