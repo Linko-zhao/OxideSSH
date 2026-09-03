@@ -6,7 +6,7 @@ use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px
 use gpui_component::Root;
 use oxide_ssh_desktop::{
     app::{self, AppView},
-    app_state::AppState,
+    state::AppState,
 };
 
 fn main() {

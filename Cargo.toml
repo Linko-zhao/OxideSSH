@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/oxide-ssh-app",
     "crates/oxide-ssh-core",
     "crates/oxide-ssh-terminal",
     "crates/oxide-ssh-desktop",
@@ -24,6 +25,7 @@ gpui = "=0.2.2"
 gpui-component = "=0.5.1"
 gpui-component-assets = "=0.5.1"
 keyring = { version = "=4.1.6", features = ["v1"] }
+oxide-ssh-app = { path = "crates/oxide-ssh-app" }
 oxide-ssh-core = { path = "crates/oxide-ssh-core" }
 oxide-ssh-terminal = { path = "crates/oxide-ssh-terminal" }
 pageant = "=0.2.1"

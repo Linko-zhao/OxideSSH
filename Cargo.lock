@@ -4490,6 +4490,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxide-ssh-app"
+version = "0.1.0"
+dependencies = [
+ "async-channel 2.5.0",
+ "bytes",
+ "oxide-ssh-core",
+ "oxide-ssh-terminal",
+ "uuid",
+]
+
+[[package]]
 name = "oxide-ssh-core"
 version = "0.1.0"
 dependencies = [
@@ -4522,6 +4533,7 @@ dependencies = [
  "gpui-component",
  "gpui-component-assets",
  "keyring",
+ "oxide-ssh-app",
  "oxide-ssh-core",
  "oxide-ssh-terminal",
  "parking_lot",

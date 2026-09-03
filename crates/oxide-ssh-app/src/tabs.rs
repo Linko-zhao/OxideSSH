@@ -363,15 +363,15 @@ impl ModalRequest {
         }
     }
 
-    pub(crate) fn is_secret_for(&self, expected_tab_id: TabId) -> bool {
+    pub fn is_secret_for(&self, expected_tab_id: TabId) -> bool {
         matches!(self, Self::Secret { tab_id } if *tab_id == expected_tab_id)
     }
 
-    pub(crate) fn is_confirm_close_for(&self, expected_tab_id: TabId) -> bool {
+    pub fn is_confirm_close_for(&self, expected_tab_id: TabId) -> bool {
         matches!(self, Self::ConfirmClose { tab_id } if *tab_id == expected_tab_id)
     }
 
-    pub(crate) fn is_host_key_for(&self, expected_tab_id: TabId, expected_prompt_id: Uuid) -> bool {
+    pub fn is_host_key_for(&self, expected_tab_id: TabId, expected_prompt_id: Uuid) -> bool {
         matches!(
             self,
             Self::HostKey {
@@ -382,7 +382,7 @@ impl ModalRequest {
         )
     }
 
-    pub(crate) fn is_changed_host_key_for(
+    pub fn is_changed_host_key_for(
         &self,
         expected_tab_id: TabId,
         expected_request_id: Uuid,
@@ -443,7 +443,7 @@ impl ModalQueue {
     /// Removes the FIFO head only when it belongs to the callback currently
     /// being handled. A stale callback therefore cannot consume another
     /// request's prompt.
-    pub(crate) fn complete_current_if(
+    pub fn complete_current_if(
         &mut self,
         matches_current: impl FnOnce(&ModalRequest) -> bool,
     ) -> Option<ModalRequest> {
@@ -1027,7 +1027,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_and_locale_switch_without_session_restart() {
+    fn theme_switch_does_not_restart_session() {
         let mut tabs = TabCollection::new();
         let tab_id = tabs.open(profile(), size(), TerminalColors::default(), false);
         tabs.apply_event(tab_id, SessionEvent::StateChanged(SessionState::Connected));
@@ -1040,10 +1040,8 @@ mod tests {
         };
 
         tabs.set_terminal_colors(light);
-        let locale = crate::i18n::ResolvedLocale::ZhCn;
 
         let tab = tabs.tab(tab_id).unwrap();
-        assert_eq!(locale, crate::i18n::ResolvedLocale::ZhCn);
         assert_eq!(tab.state(), &TabState::Connected);
         assert!(visible_text(tab).contains("content"));
         let content_cell = tab

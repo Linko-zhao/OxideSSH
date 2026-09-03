@@ -37,16 +37,19 @@ use secrecy::SecretString;
 use uuid::Uuid;
 
 use crate::{
-    app_state::{AppLoadOutcome, AppState, AuthMethod, ConnectionForm, FormError, ResolvedTheme},
     credentials::{
         CredentialTransactionError, ProfileCredentialCoordinator, SystemCredentialStore,
         credential_error_message_id,
     },
     i18n::{Catalog, MessageId, ResolvedLocale},
-    tabs::{
-        DisconnectReason, ModalRequest, TabCollection, TabId, TabLocalError, TabNotification,
-        TabState,
+    state::{
+        AppLoadOutcome, AppState,
+        connection_form::{AuthMethod, ConnectionForm, FormError},
+        theme::ResolvedTheme,
     },
+};
+use oxide_ssh_app::tabs::{
+    DisconnectReason, ModalRequest, TabCollection, TabId, TabLocalError, TabNotification, TabState,
 };
 
 mod messages;
