@@ -414,28 +414,28 @@ impl DialogPresenter {
             // fields must be included with `when`, not `.visible(false)`.
             .when(editor.auth_method == AuthMethod::PrivateKey, |form| {
                 form.child(
-                    field()
-                        .label(private_key_label)
-                        .child(
-                            h_flex()
-                                .gap(px(8.))
-                                .child(Input::new(&editor.private_key_path))
-                                .child(browse_button),
-                        ),
+                    field().label(private_key_label).child(
+                        h_flex()
+                            .gap(px(8.))
+                            .child(Input::new(&editor.private_key_path))
+                            .child(browse_button),
+                    ),
                 )
-            })
-            .when(secret_is_visible, |form| {
-                form.child(field().label(secret_label).child(Input::new(&editor.secret)))
             })
             .when(secret_is_visible, |form| {
                 form.child(
                     field()
-                        .label(remember_label)
-                        .child(
-                            Checkbox::new("editor-remember")
-                                .checked(editor.remember)
-                                .on_click(remember_listener),
-                        ),
+                        .label(secret_label)
+                        .child(Input::new(&editor.secret)),
+                )
+            })
+            .when(secret_is_visible, |form| {
+                form.child(
+                    field().label(remember_label).child(
+                        Checkbox::new("editor-remember")
+                            .checked(editor.remember)
+                            .on_click(remember_listener),
+                    ),
                 )
             })
             .child(
