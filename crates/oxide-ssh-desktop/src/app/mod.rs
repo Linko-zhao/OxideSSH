@@ -9,7 +9,7 @@ use gpui::{
     prelude::*, px, relative, rgb, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Root, Theme, ThemeMode, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Root, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
@@ -19,7 +19,6 @@ use gpui_component::{
     input::{Input, InputState},
     list::ListItem,
     radio::{Radio, RadioGroup},
-    tab::{Tab, TabBar},
 };
 use oxide_ssh_core::{
     credentials::{CredentialError, CredentialStore},
@@ -45,7 +44,7 @@ use crate::{
     state::{
         AppLoadOutcome, AppState,
         connection_form::{AuthMethod, ConnectionForm, FormError},
-        theme::ResolvedTheme,
+        theme::{ResolvedTheme, apply_theme},
     },
 };
 use oxide_ssh_app::tabs::{
@@ -89,6 +88,8 @@ actions!(
         TerminalShiftTab,
         DialogFocusNext,
         DialogFocusPrev,
+        DialogSubmit,
+        DialogCancel,
     ]
 );
 
@@ -102,6 +103,10 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("shift-tab", DialogFocusPrev, Some("OxideSSHDialog")),
         KeyBinding::new("tab", DialogFocusNext, Some("OxideSSHDialog > Input")),
         KeyBinding::new("shift-tab", DialogFocusPrev, Some("OxideSSHDialog > Input")),
+        KeyBinding::new("enter", DialogSubmit, Some("OxideSSHDialog")),
+        KeyBinding::new("enter", DialogSubmit, Some("OxideSSHDialog > Input")),
+        KeyBinding::new("escape", DialogCancel, Some("OxideSSHDialog")),
+        KeyBinding::new("escape", DialogCancel, Some("OxideSSHDialog > Input")),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
     ];
@@ -231,14 +236,7 @@ impl AppView {
             .as_ref()
             .map(|state| state.resolved_theme(system_is_dark))
             .unwrap_or(ResolvedTheme::Dark);
-        Theme::change(
-            match theme {
-                ResolvedTheme::Light => ThemeMode::Light,
-                ResolvedTheme::Dark => ThemeMode::Dark,
-            },
-            Some(window),
-            cx,
-        );
+        apply_theme(theme, window, cx);
         gpui_component::set_locale(match locale {
             ResolvedLocale::EnUs => "en",
             ResolvedLocale::ZhCn => "zh-CN",
@@ -315,14 +313,7 @@ impl AppView {
         }
         if self.theme != theme {
             self.theme = theme;
-            Theme::change(
-                match theme {
-                    ResolvedTheme::Light => ThemeMode::Light,
-                    ResolvedTheme::Dark => ThemeMode::Dark,
-                },
-                Some(window),
-                cx,
-            );
+            apply_theme(theme, window, cx);
             self.tabs.set_terminal_colors(self.theme.terminal_colors());
         }
     }

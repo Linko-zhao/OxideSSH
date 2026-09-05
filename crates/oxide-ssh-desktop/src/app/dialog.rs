@@ -188,6 +188,113 @@ impl DialogPresenter {
         cx.stop_propagation();
     }
 
+    /// Enter triggers the dialog's primary action; ignored while the action
+    /// is in a disabled/in-progress state (e.g. an editor save in flight).
+    fn on_submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.payload.snapshot {
+            DialogSnapshot::Editor(editor) => {
+                if editor.save_state != EditorSaveState::Idle {
+                    return;
+                }
+                self.owner
+                    .update(cx, |app, cx| app.save_editor(window, cx))
+                    .ok();
+            }
+            DialogSnapshot::Confirm(_) => {
+                self.owner
+                    .update(cx, |app, cx| app.perform_confirm(window, cx))
+                    .ok();
+            }
+            DialogSnapshot::Modal { request, .. } => match request {
+                ModalRequest::Secret { tab_id } => {
+                    let tab_id = *tab_id;
+                    self.owner
+                        .update(cx, |app, cx| app.submit_secret(tab_id, window, cx))
+                        .ok();
+                }
+                ModalRequest::HostKey {
+                    tab_id, prompt_id, ..
+                } => {
+                    let (tab_id, prompt_id) = (*tab_id, *prompt_id);
+                    self.owner
+                        .update(cx, |app, cx| {
+                            app.decide_host_key(
+                                tab_id,
+                                prompt_id,
+                                HostKeyDecision::AcceptAndStore,
+                                cx,
+                            )
+                        })
+                        .ok();
+                }
+                ModalRequest::ChangedHostKey {
+                    tab_id, request_id, ..
+                } => {
+                    let (tab_id, request_id) = (*tab_id, *request_id);
+                    self.owner
+                        .update(cx, |app, cx| app.open_trusted_hosts(tab_id, request_id, cx))
+                        .ok();
+                }
+                ModalRequest::ConfirmClose { tab_id } => {
+                    let tab_id = *tab_id;
+                    self.owner
+                        .update(cx, |app, cx| app.confirm_tab_close(tab_id, cx))
+                        .ok();
+                }
+            },
+        }
+    }
+
+    /// Esc dismisses the dialog through the same path as its cancel/close
+    /// button; ignored while an editor save is in flight.
+    fn on_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.payload.snapshot {
+            DialogSnapshot::Editor(editor) => {
+                if editor.save_state != EditorSaveState::Idle {
+                    return;
+                }
+                self.owner.update(cx, |app, cx| app.cancel_editor(cx)).ok();
+            }
+            DialogSnapshot::Confirm(_) => {
+                self.owner.update(cx, |app, cx| app.cancel_confirm(cx)).ok();
+            }
+            DialogSnapshot::Modal { request, .. } => match request {
+                ModalRequest::Secret { tab_id } => {
+                    let tab_id = *tab_id;
+                    self.owner
+                        .update(cx, |app, cx| app.cancel_secret(tab_id, window, cx))
+                        .ok();
+                }
+                ModalRequest::HostKey {
+                    tab_id, prompt_id, ..
+                } => {
+                    let (tab_id, prompt_id) = (*tab_id, *prompt_id);
+                    self.owner
+                        .update(cx, |app, cx| {
+                            app.decide_host_key(tab_id, prompt_id, HostKeyDecision::Reject, cx)
+                        })
+                        .ok();
+                }
+                ModalRequest::ChangedHostKey {
+                    tab_id, request_id, ..
+                } => {
+                    let (tab_id, request_id) = (*tab_id, *request_id);
+                    self.owner
+                        .update(cx, |app, cx| {
+                            app.close_changed_host_key(tab_id, request_id, cx)
+                        })
+                        .ok();
+                }
+                ModalRequest::ConfirmClose { tab_id } => {
+                    let tab_id = *tab_id;
+                    self.owner
+                        .update(cx, |app, cx| app.cancel_tab_close(tab_id, cx))
+                        .ok();
+                }
+            },
+        }
+    }
+
     fn render_editor(
         &self,
         editor: &EditorDialogSnapshot,
@@ -302,33 +409,35 @@ impl DialogPresenter {
                         .on_click(auth_listener),
                 ),
             )
-            .child(
-                field()
-                    .label(private_key_label)
-                    .visible(editor.auth_method == AuthMethod::PrivateKey)
-                    .child(
-                        h_flex()
-                            .gap(px(8.))
-                            .child(Input::new(&editor.private_key_path))
-                            .child(browse_button),
-                    ),
-            )
-            .child(
-                field()
-                    .label(secret_label)
-                    .visible(secret_is_visible)
-                    .child(Input::new(&editor.secret)),
-            )
-            .child(
-                field()
-                    .label(remember_label)
-                    .visible(secret_is_visible)
-                    .child(
-                        Checkbox::new("editor-remember")
-                            .checked(editor.remember)
-                            .on_click(remember_listener),
-                    ),
-            )
+            // NOTE: Field::visible is a no-op in gpui-component 0.5.1 (the
+            // flag is stored but never read at render), so conditional
+            // fields must be included with `when`, not `.visible(false)`.
+            .when(editor.auth_method == AuthMethod::PrivateKey, |form| {
+                form.child(
+                    field()
+                        .label(private_key_label)
+                        .child(
+                            h_flex()
+                                .gap(px(8.))
+                                .child(Input::new(&editor.private_key_path))
+                                .child(browse_button),
+                        ),
+                )
+            })
+            .when(secret_is_visible, |form| {
+                form.child(field().label(secret_label).child(Input::new(&editor.secret)))
+            })
+            .when(secret_is_visible, |form| {
+                form.child(
+                    field()
+                        .label(remember_label)
+                        .child(
+                            Checkbox::new("editor-remember")
+                                .checked(editor.remember)
+                                .on_click(remember_listener),
+                        ),
+                )
+            })
             .child(
                 field().child(
                     div()
@@ -631,6 +740,8 @@ impl Render for DialogPresenter {
             .on_action(
                 cx.listener(|this, _: &DialogFocusPrev, window, cx| this.on_focus_prev(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &DialogSubmit, window, cx| this.on_submit(window, cx)))
+            .on_action(cx.listener(|this, _: &DialogCancel, window, cx| this.on_cancel(window, cx)))
             .child(div().track_focus(&self.focus.start))
             .child(content)
             .child(div().track_focus(&self.focus.end))

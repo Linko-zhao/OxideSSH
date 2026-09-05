@@ -6,23 +6,21 @@ impl AppView {
         profile: ConnectionProfile,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        // Muted avatar hues that sit comfortably on both light and dark
+        // cards; keyed by profile id so a host keeps its color.
         const PALETTE: [u32; 8] = [
-            0x00f9_7316,
-            0x00ea_b308,
-            0x00ef_4444,
-            0x003b_82f6,
-            0x008b_5cf6,
-            0x00ec_4899,
-            0x0022_c55e,
-            0x0014_b8a6,
+            0x006b_8cae,
+            0x007b_a389,
+            0x00b5_936b,
+            0x009a_7bb5,
+            0x005f_9ea8,
+            0x00b5_7e7e,
+            0x007e_93b8,
+            0x00a8_927c,
         ];
-        let hash: usize = profile
-            .id
-            .0
-            .as_bytes()
-            .iter()
-            .map(|byte| *byte as usize)
-            .sum();
+        let hash: usize = profile.id.0.as_bytes().iter().fold(0usize, |acc, byte| {
+            acc.wrapping_mul(31).wrapping_add(*byte as usize)
+        });
         let tile_color = rgb(PALETTE[hash % PALETTE.len()]);
         let initial: String = profile
             .name
@@ -38,8 +36,6 @@ impl AppView {
         let status = self
             .profile_status(profile.id)
             .map(|status| status.to_owned());
-        let edit_label = self.text(MessageId::Edit).to_owned();
-        let delete_label = self.text(MessageId::Delete).to_owned();
         let edit_id = SharedString::from(format!("edit-{}", profile.id.0));
         let delete_id = SharedString::from(format!("delete-{}", profile.id.0));
         let profile_for_connect = profile.clone();
@@ -48,22 +44,26 @@ impl AppView {
         let view = cx.entity();
         let theme = cx.theme();
         let border = theme.border;
-        let hover_border = theme.primary;
         let card_bg = theme.secondary;
+        // Hover lifts the card one step above its resting background.
+        let hover_bg = theme.accent;
+        let radius_lg = theme.radius_lg;
         let muted_foreground = theme.muted_foreground;
+        let status_color = theme.primary;
         div()
             .id(SharedString::from(format!("host-card-{}", profile.id.0)))
+            .group("host-card")
             .w(px(300.))
             .p(px(14.))
             .flex()
             .flex_col()
             .gap(px(10.))
-            .rounded(px(10.))
+            .rounded(radius_lg)
             .border_1()
             .border_color(border)
             .bg(card_bg)
             .cursor_pointer()
-            .hover(move |style| style.border_color(hover_border))
+            .hover(move |style| style.bg(hover_bg))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.connect_profile(profile_for_connect.clone(), window, cx)
             }))
@@ -76,12 +76,12 @@ impl AppView {
                         div()
                             .size(px(36.))
                             .flex_none()
-                            .rounded(px(8.))
+                            .rounded_full()
                             .bg(tile_color)
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_color(rgb(0x00ff_ffff))
+                            .text_color(rgb(0x00f5_f6f8))
                             .font_weight(gpui::FontWeight::BOLD)
                             .child(initial),
                     )
@@ -106,25 +106,15 @@ impl AppView {
                                     .text_color(muted_foreground)
                                     .child(endpoint),
                             ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().primary)
-                            .child(status.unwrap_or_default()),
                     )
                     .child(
                         h_flex()
-                            .gap(px(6.))
+                            .gap(px(2.))
+                            .opacity(0.)
+                            .group_hover("host-card", |style| style.opacity(1.))
                             .child(
                                 Button::new(edit_id)
-                                    .label(edit_label)
+                                    .icon(IconName::Settings2)
                                     .ghost()
                                     .compact()
                                     .on_click(move |_, window, cx| {
@@ -141,7 +131,7 @@ impl AppView {
                             .child({
                                 let view = cx.entity();
                                 Button::new(delete_id)
-                                    .label(delete_label)
+                                    .icon(IconName::Delete)
                                     .ghost()
                                     .compact()
                                     .on_click(move |_, _, cx| {
@@ -156,57 +146,9 @@ impl AppView {
                             }),
                     ),
             )
-            .into_any_element()
-    }
-
-    fn render_group_card(&self, host_count: usize, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let theme = cx.theme();
-        let border = theme.border;
-        let card_bg = theme.secondary;
-        let tile_bg = theme.primary;
-        let muted_foreground = theme.muted_foreground;
-        div()
-            .w(px(300.))
-            .p(px(14.))
-            .rounded(px(10.))
-            .border_1()
-            .border_color(border)
-            .bg(card_bg)
-            .flex()
-            .items_center()
-            .gap(px(12.))
-            .child(
-                div()
-                    .size(px(36.))
-                    .flex_none()
-                    .rounded(px(8.))
-                    .bg(tile_bg)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(rgb(0x00ff_ffff))
-                    .child(Icon::new(IconName::Folder).size(px(18.))),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .gap(px(2.))
-                    .child(
-                        div()
-                            .whitespace_nowrap()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_sm()
-                            .child(self.text(MessageId::AllHosts)),
-                    )
-                    .child(div().text_xs().text_color(muted_foreground).child(format!(
-                        "{} {}",
-                        host_count,
-                        self.text(MessageId::Hosts)
-                    ))),
-            )
+            .when_some(status, |card, status| {
+                card.child(div().text_xs().text_color(status_color).child(status))
+            })
             .into_any_element()
     }
 
@@ -245,18 +187,30 @@ impl AppView {
                 .child(grid)
                 .into_any_element()
         };
-        let groups_section = (total_profiles > 0).then(|| {
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(10.))
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(self.text(MessageId::Groups)),
-                )
-                .child(self.render_group_card(total_profiles, cx))
+        // Groups are display-only for now (see CONTEXT.md): render them as a
+        // filter chip strip above the hosts grid instead of full-size cards.
+        let filter_chips = (total_profiles > 0).then(|| {
+            let theme = cx.theme();
+            h_flex().gap(px(8.)).child(
+                h_flex()
+                    .id("filter-all-hosts")
+                    .items_center()
+                    .gap(px(8.))
+                    .px(px(12.))
+                    .py(px(5.))
+                    .rounded_full()
+                    .bg(theme.secondary)
+                    .border_1()
+                    .border_color(theme.border)
+                    .text_sm()
+                    .child(self.text(MessageId::AllHosts))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.muted_foreground)
+                            .child(format!("{total_profiles}")),
+                    ),
+            )
         });
         div()
             .size_full()
@@ -284,13 +238,7 @@ impl AppView {
                             .child(Input::new(&self.search).prefix(Icon::new(IconName::Search))),
                     ),
             )
-            .children(groups_section)
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(self.text(MessageId::Hosts)),
-            )
+            .children(filter_chips)
             .child(div().flex_1().child(content))
             .into_any_element()
     }
