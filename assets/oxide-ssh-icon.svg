@@ -1,8 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">OxideSSH application icon</title>
-  <desc id="desc">A graphite square with an orange command prompt and white underscore.</desc>
-  <rect width="1024" height="1024" rx="184" fill="#1B1D23"/>
-  <path d="M232 300 L474 512 L232 724" fill="none" stroke="#E58A3A" stroke-width="112" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M536 720 H806" fill="none" stroke="#F5F7FA" stroke-width="88" stroke-linecap="round"/>
+  <desc id="desc">A rounded white square with a line-art terminal window showing a command prompt.</desc>
+  <!-- rounded white background -->
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="#FFFFFF" stroke="#1B1D23" stroke-width="40"/>
+  <!-- terminal window -->
+  <rect x="176" y="272" width="672" height="480" rx="48" fill="none" stroke="#1B1D23" stroke-width="40"/>
+  <!-- title bar divider -->
+  <path d="M176 400 H848" fill="none" stroke="#1B1D23" stroke-width="40"/>
+  <!-- window controls -->
+  <circle cx="256" cy="336" r="26" fill="none" stroke="#1B1D23" stroke-width="28"/>
+  <circle cx="360" cy="336" r="26" fill="none" stroke="#1B1D23" stroke-width="28"/>
+  <circle cx="464" cy="336" r="26" fill="none" stroke="#1B1D23" stroke-width="28"/>
+  <!-- prompt chevron -->
+  <path d="M264 496 L368 576 L264 656" fill="none" stroke="#1B1D23" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- cursor underscore -->
+  <path d="M440 664 H624" fill="none" stroke="#1B1D23" stroke-width="44" stroke-linecap="round"/>
 </svg>
