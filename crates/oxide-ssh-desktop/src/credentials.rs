@@ -367,6 +367,7 @@ mod tests {
             auth: AuthConfig::Password {
                 credential_ref: None,
             },
+            tag_ids: Vec::new(),
         }
     }
 

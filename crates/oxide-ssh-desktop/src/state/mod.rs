@@ -1,9 +1,11 @@
 //! Loaded application state: config store, profiles, known hosts, search.
 
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use oxide_ssh_core::{
-    model::{AppSettings, ConnectionProfile, Endpoint, LocaleSetting, ThemeSetting},
+    model::{
+        AppSettings, ConnectionProfile, Endpoint, LocaleSetting, Tag, TagColor, TagId, ThemeSetting,
+    },
     storage::{AppConfig, AppStore, KnownHostEntry, KnownHosts, StorageError},
 };
 
@@ -28,6 +30,30 @@ pub struct AppState {
     config: AppConfig,
     known_hosts: KnownHosts,
     search_query: String,
+    tag_filter: TagFilter,
+}
+
+/// Sidebar tag selection. Empty selection with `untagged == false` shows all
+/// profiles; otherwise a profile matches if any of its tags is selected, or
+/// it has no tags while `untagged` is selected.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TagFilter {
+    pub tags: HashSet<TagId>,
+    pub untagged: bool,
+}
+
+impl TagFilter {
+    pub fn is_active(&self) -> bool {
+        self.untagged || !self.tags.is_empty()
+    }
+
+    fn matches(&self, profile: &ConnectionProfile) -> bool {
+        if !self.is_active() {
+            return true;
+        }
+        (self.untagged && profile.tag_ids.is_empty())
+            || profile.tag_ids.iter().any(|id| self.tags.contains(id))
+    }
 }
 
 impl AppState {
@@ -50,6 +76,7 @@ impl AppState {
             config,
             known_hosts,
             search_query: String::new(),
+            tag_filter: TagFilter::default(),
         })
     }
 
@@ -80,10 +107,18 @@ impl AppState {
             .profiles
             .iter()
             .filter(|profile| {
-                query.is_empty()
-                    || profile.name.to_lowercase().contains(&query)
-                    || profile.endpoint.host.to_lowercase().contains(&query)
-                    || profile.username.to_lowercase().contains(&query)
+                self.tag_filter.matches(profile)
+                    && (query.is_empty()
+                        || profile.name.to_lowercase().contains(&query)
+                        || profile.endpoint.host.to_lowercase().contains(&query)
+                        || profile.username.to_lowercase().contains(&query)
+                        || profile.tag_ids.iter().any(|id| {
+                            self.config
+                                .tags
+                                .iter()
+                                .find(|tag| tag.id == *id)
+                                .is_some_and(|tag| tag.name.to_lowercase().contains(&query))
+                        }))
             })
             .collect();
         profiles.sort_by(|left, right| {
@@ -93,6 +128,93 @@ impl AppState {
                 .then_with(|| left.id.0.cmp(&right.id.0))
         });
         profiles
+    }
+
+    /// Registry entries sorted by case-insensitive name for display.
+    pub fn tags(&self) -> Vec<&Tag> {
+        let mut tags: Vec<_> = self.config.tags.iter().collect();
+        tags.sort_by(|left, right| {
+            left.name
+                .to_lowercase()
+                .cmp(&right.name.to_lowercase())
+                .then_with(|| left.id.0.cmp(&right.id.0))
+        });
+        tags
+    }
+
+    pub fn tag(&self, id: TagId) -> Option<&Tag> {
+        self.config.tags.iter().find(|tag| tag.id == id)
+    }
+
+    pub fn tag_filter(&self) -> &TagFilter {
+        &self.tag_filter
+    }
+
+    pub fn toggle_tag_filter(&mut self, id: TagId) {
+        if !self.tag_filter.tags.remove(&id) {
+            self.tag_filter.tags.insert(id);
+        }
+    }
+
+    pub fn toggle_untagged_filter(&mut self) {
+        self.tag_filter.untagged = !self.tag_filter.untagged;
+    }
+
+    pub fn clear_tag_filter(&mut self) {
+        self.tag_filter = TagFilter::default();
+    }
+
+    /// Profiles currently referencing the tag; used for delete confirmation.
+    pub fn profiles_with_tag(&self, id: TagId) -> Vec<&ConnectionProfile> {
+        self.config
+            .profiles
+            .iter()
+            .filter(|profile| profile.tag_ids.contains(&id))
+            .collect()
+    }
+
+    pub fn create_tag(
+        &mut self,
+        name: impl Into<String>,
+        color: Option<TagColor>,
+    ) -> Result<Tag, StorageError> {
+        let mut tag = Tag::new(name.into().trim().to_string());
+        tag.color = color;
+        let mut config = self.config.clone();
+        config.tags.push(tag.clone());
+        self.store.save_config(&config)?;
+        self.config = config;
+        Ok(tag)
+    }
+
+    pub fn update_tag(
+        &mut self,
+        id: TagId,
+        name: impl Into<String>,
+        color: Option<TagColor>,
+    ) -> Result<(), StorageError> {
+        let mut config = self.config.clone();
+        let Some(tag) = config.tags.iter_mut().find(|tag| tag.id == id) else {
+            return Ok(());
+        };
+        tag.name = name.into().trim().to_string();
+        tag.color = color;
+        self.store.save_config(&config)?;
+        self.config = config;
+        Ok(())
+    }
+
+    /// Deletes the registry entry and removes the reference from every profile.
+    pub fn delete_tag(&mut self, id: TagId) -> Result<(), StorageError> {
+        let mut config = self.config.clone();
+        config.tags.retain(|tag| tag.id != id);
+        for profile in &mut config.profiles {
+            profile.tag_ids.retain(|tag_id| *tag_id != id);
+        }
+        self.store.save_config(&config)?;
+        self.config = config;
+        self.tag_filter.tags.remove(&id);
+        Ok(())
     }
 
     pub fn set_locale(&mut self, locale: LocaleSetting) -> Result<(), StorageError> {
@@ -143,7 +265,7 @@ mod tests {
     use std::fs;
 
     use oxide_ssh_core::{
-        model::{AuthConfig, ProfileId},
+        model::{AuthConfig, ProfileId, Tag, TagColor},
         storage::CONFIG_FILE_NAME,
     };
     use tempfile::tempdir;
@@ -160,7 +282,100 @@ mod tests {
             },
             username: username.into(),
             auth: AuthConfig::Agent,
+            tag_ids: Vec::new(),
         }
+    }
+
+    #[test]
+    fn tag_filter_is_union_and_intersects_with_search() {
+        let directory = tempdir().unwrap();
+        let store = AppStore::open(directory.path().to_path_buf()).unwrap();
+        let mut config = store.load_config().unwrap();
+        let prod = Tag::new("Prod");
+        let db = Tag::new("Database");
+        let mut web = profile("Web", "web.example", "oxide");
+        web.tag_ids = vec![prod.id];
+        let mut pg = profile("Postgres", "db.example", "oxide");
+        pg.tag_ids = vec![prod.id, db.id];
+        let plain = profile("Plain", "plain.example", "oxide");
+        config.tags = vec![prod.clone(), db.clone()];
+        config.profiles = vec![web, pg, plain];
+        store.save_config(&config).unwrap();
+
+        let AppLoadOutcome::Ready(mut state) = AppState::load(directory.path().to_path_buf())
+        else {
+            panic!("expected ready state");
+        };
+        assert_eq!(state.filtered_profiles().len(), 3);
+
+        state.toggle_tag_filter(prod.id);
+        assert_eq!(
+            state
+                .filtered_profiles()
+                .iter()
+                .map(|profile| profile.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Postgres", "Web"]
+        );
+
+        // Union: adding Database keeps both, no new matches beyond Postgres.
+        state.toggle_tag_filter(db.id);
+        assert_eq!(state.filtered_profiles().len(), 2);
+
+        // Untagged selection adds Plain (union).
+        state.toggle_untagged_filter();
+        assert_eq!(state.filtered_profiles().len(), 3);
+
+        // Untagged alone hides tagged profiles.
+        state.clear_tag_filter();
+        state.toggle_untagged_filter();
+        assert_eq!(state.filtered_profiles()[0].name, "Plain");
+
+        // Search intersects with the tag filter and matches tag names.
+        state.clear_tag_filter();
+        state.set_search_query("database");
+        assert_eq!(state.filtered_profiles()[0].name, "Postgres");
+        state.set_search_query("web");
+        state.toggle_tag_filter(db.id);
+        assert!(state.filtered_profiles().is_empty());
+    }
+
+    #[test]
+    fn tag_crud_cascades_delete_and_rejects_duplicate_names() {
+        let directory = tempdir().unwrap();
+        let store = AppStore::open(directory.path().to_path_buf()).unwrap();
+        let mut config = store.load_config().unwrap();
+        config.profiles = vec![profile("Web", "web.example", "oxide")];
+        store.save_config(&config).unwrap();
+
+        let AppLoadOutcome::Ready(mut state) = AppState::load(directory.path().to_path_buf())
+        else {
+            panic!("expected ready state");
+        };
+        let tag = state.create_tag(" Prod ", Some(TagColor::Green)).unwrap();
+        assert_eq!(tag.name, "Prod");
+        assert!(state.create_tag("prod", None).is_err());
+
+        let profile_id = state.profiles()[0].id;
+        state
+            .store()
+            .update_config(|config| config.profiles[0].tag_ids = vec![tag.id])
+            .unwrap();
+        state.reload_config().unwrap();
+        assert_eq!(state.profiles_with_tag(tag.id).len(), 1);
+
+        state.update_tag(tag.id, "Production", None).unwrap();
+        assert_eq!(state.tag(tag.id).unwrap().name, "Production");
+        assert_eq!(state.tag(tag.id).unwrap().color, None);
+
+        state.toggle_tag_filter(tag.id);
+        state.delete_tag(tag.id).unwrap();
+        assert!(state.tags().is_empty());
+        assert!(!state.tag_filter().is_active());
+        let reloaded = store.load_config().unwrap();
+        assert!(reloaded.tags.is_empty());
+        assert_eq!(reloaded.profiles[0].id, profile_id);
+        assert!(reloaded.profiles[0].tag_ids.is_empty());
     }
 
     #[test]

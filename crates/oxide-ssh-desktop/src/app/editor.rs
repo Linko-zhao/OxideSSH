@@ -27,6 +27,8 @@ pub(super) struct ConnectionEditor {
     pub(super) username: Entity<InputState>,
     pub(super) private_key_path: Entity<InputState>,
     pub(super) secret: Entity<InputState>,
+    /// Inline "create tag" field; the name is read when the button is clicked.
+    pub(super) tag_name: Entity<InputState>,
 }
 
 impl ConnectionEditor {
@@ -61,6 +63,7 @@ impl ConnectionEditor {
             MessageId::Password
         };
         let secret = new_input(window, cx, secret_id, "", true, locale);
+        let tag_name = new_input(window, cx, MessageId::NewTag, "", false, locale);
         Self {
             id: EditorId(Uuid::new_v4()),
             form,
@@ -70,6 +73,7 @@ impl ConnectionEditor {
             username,
             private_key_path,
             secret,
+            tag_name,
         }
     }
 
@@ -243,6 +247,58 @@ impl AppView {
             editor.form.remember = !editor.form.remember;
         }
         cx.notify();
+    }
+
+    /// Toggles tag membership for the open editor. Tag edits are deliberately
+    /// absent from the dialog identity so focus is not rebuilt.
+    pub(super) fn toggle_editor_tag(&mut self, id: TagId, cx: &mut Context<Self>) {
+        if let Some(editor) = &mut self.editor {
+            match editor.form.tag_ids.iter().position(|tag_id| *tag_id == id) {
+                Some(index) => {
+                    editor.form.tag_ids.remove(index);
+                }
+                None => editor.form.tag_ids.push(id),
+            }
+        }
+        cx.notify();
+    }
+
+    /// Creates a tag from the editor's inline field and selects it on the form.
+    pub(super) fn create_tag_from_editor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Tag> {
+        let name = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.tag_name.read(cx).value().trim().to_string())?;
+        if name.is_empty() {
+            return None;
+        }
+        let tag = match self
+            .state
+            .as_mut()
+            .map(|state| state.create_tag(name, None))
+        {
+            Some(Ok(tag)) => tag,
+            Some(Err(error)) => {
+                self.status_message = Some(tag_storage_error_message_id(&error));
+                cx.notify();
+                return None;
+            }
+            None => return None,
+        };
+        if let Some(editor) = &mut self.editor {
+            if !editor.form.tag_ids.contains(&tag.id) {
+                editor.form.tag_ids.push(tag.id);
+            }
+            editor
+                .tag_name
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        cx.notify();
+        Some(tag)
     }
 }
 

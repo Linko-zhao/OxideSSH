@@ -1,10 +1,12 @@
 use super::editor::{EditorId, EditorSaveState, editor_save_state};
+use super::tags::TagManagerEntry;
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ConfirmAction {
     DeleteProfile(ProfileId),
     DeleteHost(Endpoint),
+    DeleteTag(TagId),
     Quit,
 }
 
@@ -34,6 +36,7 @@ enum DialogIdentityKind {
         request_id: Uuid,
     },
     ConfirmClose(TabId),
+    TagManager,
 }
 
 /// Stable logical identity used to decide whether a deferred focus pass is
@@ -46,6 +49,7 @@ enum DialogFocusIdentity {
     HostKey { tab_id: TabId, prompt_id: Uuid },
     ChangedHostKey { tab_id: TabId, request_id: Uuid },
     ConfirmClose(TabId),
+    TagManager,
 }
 
 impl DialogIdentityKind {
@@ -63,6 +67,7 @@ impl DialogIdentityKind {
                 request_id: *request_id,
             },
             Self::ConfirmClose(tab_id) => DialogFocusIdentity::ConfirmClose(*tab_id),
+            Self::TagManager => DialogFocusIdentity::TagManager,
         }
     }
 }
@@ -70,7 +75,12 @@ impl DialogIdentityKind {
 #[derive(Clone)]
 enum DialogSnapshot {
     Editor(EditorDialogSnapshot),
-    Confirm(ConfirmAction),
+    Confirm {
+        action: ConfirmAction,
+        /// Profiles referencing a tag being deleted; shown in the body.
+        affected: usize,
+    },
+    TagManager(Vec<TagManagerEntry>),
     Modal {
         request: ModalRequest,
         /// The shared one-time credential input; rendered by the presenter for
@@ -93,6 +103,10 @@ struct EditorDialogSnapshot {
     username: Entity<InputState>,
     private_key_path: Entity<InputState>,
     secret: Entity<InputState>,
+    /// Registry tags available for assignment, name-sorted.
+    tags: Vec<Tag>,
+    tag_ids: Vec<TagId>,
+    tag_name: Entity<InputState>,
 }
 
 struct DialogPayload {
@@ -162,6 +176,12 @@ impl DialogPresenter {
                 });
                 return;
             }
+            DialogSnapshot::TagManager(entries) => {
+                if let Some(entry) = entries.first() {
+                    entry.name.update(cx, |input, cx| input.focus(window, cx));
+                    return;
+                }
+            }
             _ => {}
         }
         // Non-input dialogs: land on the first/last real component by
@@ -200,9 +220,14 @@ impl DialogPresenter {
                     .update(cx, |app, cx| app.save_editor(window, cx))
                     .ok();
             }
-            DialogSnapshot::Confirm(_) => {
+            DialogSnapshot::Confirm { .. } => {
                 self.owner
                     .update(cx, |app, cx| app.perform_confirm(window, cx))
+                    .ok();
+            }
+            DialogSnapshot::TagManager(_) => {
+                self.owner
+                    .update(cx, |app, cx| app.commit_tag_names(window, cx))
                     .ok();
             }
             DialogSnapshot::Modal { request, .. } => match request {
@@ -255,8 +280,13 @@ impl DialogPresenter {
                 }
                 self.owner.update(cx, |app, cx| app.cancel_editor(cx)).ok();
             }
-            DialogSnapshot::Confirm(_) => {
+            DialogSnapshot::Confirm { .. } => {
                 self.owner.update(cx, |app, cx| app.cancel_confirm(cx)).ok();
+            }
+            DialogSnapshot::TagManager(_) => {
+                self.owner
+                    .update(cx, |app, cx| app.close_tag_manager(window, cx))
+                    .ok();
             }
             DialogSnapshot::Modal { request, .. } => match request {
                 ModalRequest::Secret { tab_id } => {
@@ -311,6 +341,12 @@ impl DialogPresenter {
         let passphrase_label = text(MessageId::Passphrase);
         let remember_label = text(MessageId::Remember);
         let agent_description = text(MessageId::AgentDescription);
+        let tags_label = text(MessageId::Tags);
+        let create_label = text(MessageId::Create);
+        let tag_border = cx.theme().border;
+        let tag_secondary = cx.theme().secondary;
+        let tag_selected_bg = cx.theme().primary;
+        let tag_selected_fg = cx.theme().primary_foreground;
         let auth_index = match editor.auth_method {
             AuthMethod::Password => 0,
             AuthMethod::PrivateKey => 1,
@@ -380,6 +416,70 @@ impl DialogPresenter {
         let browse_button = Button::new("browse-private-key")
             .label(text(MessageId::Browse))
             .on_click(browse_listener);
+        let mut tag_chips = h_flex().gap(px(6.)).flex_wrap();
+        for tag in &editor.tags {
+            let selected = editor.tag_ids.contains(&tag.id);
+            let id = tag.id;
+            let toggle_listener = cx.listener(move |this, _, _, cx| {
+                let _ = this
+                    .owner
+                    .update(cx, |app, cx| app.toggle_editor_tag(id, cx));
+                if let DialogSnapshot::Editor(editor) = &mut this.payload.snapshot {
+                    match editor.tag_ids.iter().position(|tag_id| *tag_id == id) {
+                        Some(index) => {
+                            editor.tag_ids.remove(index);
+                        }
+                        None => editor.tag_ids.push(id),
+                    }
+                }
+                cx.notify();
+            });
+            let chip = h_flex()
+                .id(SharedString::from(format!("editor-tag-{}", tag.id.0)))
+                .items_center()
+                .gap(px(6.))
+                .px(px(8.))
+                .py(px(3.))
+                .rounded_full()
+                .border_1()
+                .text_xs()
+                .cursor_pointer()
+                .child(
+                    div()
+                        .size(px(8.))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(rgb(tag_color_rgb(tag.color.unwrap_or(TagColor::Gray)))),
+                )
+                .child(tag.name.clone())
+                .on_click(toggle_listener);
+            tag_chips = tag_chips.child(if selected {
+                chip.bg(tag_selected_bg)
+                    .border_color(tag_selected_bg)
+                    .text_color(tag_selected_fg)
+            } else {
+                chip.bg(tag_secondary).border_color(tag_border)
+            });
+        }
+        let create_listener = cx.listener(|this, _, window, cx| {
+            let created = this
+                .owner
+                .update(cx, |app, cx| app.create_tag_from_editor(window, cx))
+                .ok()
+                .flatten();
+            if let Some(tag) = created
+                && let DialogSnapshot::Editor(editor) = &mut this.payload.snapshot
+            {
+                if !editor.tag_ids.contains(&tag.id) {
+                    editor.tag_ids.push(tag.id);
+                }
+                editor.tags.push(tag);
+                editor.tags.sort_by(|left, right| {
+                    left.name.to_lowercase().cmp(&right.name.to_lowercase())
+                });
+            }
+            cx.notify();
+        });
         v_form()
             .w(px(560.))
             .label_width(px(120.))
@@ -439,6 +539,21 @@ impl DialogPresenter {
                 )
             })
             .child(
+                field().label(tags_label).child(
+                    div().flex().flex_col().gap(px(8.)).child(tag_chips).child(
+                        h_flex()
+                            .gap(px(8.))
+                            .child(div().flex_1().child(Input::new(&editor.tag_name)))
+                            .child(
+                                Button::new("create-tag")
+                                    .label(create_label)
+                                    .compact()
+                                    .on_click(create_listener),
+                            ),
+                    ),
+                ),
+            )
+            .child(
                 field().child(
                     div()
                         .flex()
@@ -472,12 +587,19 @@ impl DialogPresenter {
             .into_any_element()
     }
 
-    fn render_confirm(&self, action: &ConfirmAction, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn render_confirm(
+        &self,
+        action: &ConfirmAction,
+        affected: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let (message, action_label) = match action {
             ConfirmAction::DeleteProfile(_) => (MessageId::ConfirmDeleteProfile, MessageId::Delete),
             ConfirmAction::DeleteHost(_) => (MessageId::ConfirmDeleteHost, MessageId::Delete),
+            ConfirmAction::DeleteTag(_) => (MessageId::ConfirmDeleteTag, MessageId::Delete),
             ConfirmAction::Quit => (MessageId::ConfirmQuit, MessageId::Quit),
         };
+        let affected_color = cx.theme().muted_foreground;
         let cancel_listener = cx.listener(|this, _, _, cx| {
             this.owner.update(cx, |app, cx| app.cancel_confirm(cx)).ok();
         });
@@ -486,11 +608,20 @@ impl DialogPresenter {
                 .update(cx, |app, cx| app.perform_confirm(window, cx))
                 .ok();
         });
+        let mut body = h_flex().gap(px(8.)).child(self.text(message));
+        if matches!(action, ConfirmAction::DeleteTag(_)) {
+            body = body.child(
+                div()
+                    .text_sm()
+                    .text_color(affected_color)
+                    .child(format!("{affected}")),
+            );
+        }
         div()
             .flex()
             .flex_col()
             .gap(px(14.))
-            .child(div().child(self.text(message)))
+            .child(body)
             .child(
                 div()
                     .flex()
@@ -509,6 +640,140 @@ impl DialogPresenter {
                     ),
             )
             .into_any_element()
+    }
+
+    fn render_tag_manager(
+        &self,
+        entries: &[TagManagerEntry],
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let heading = self.text(MessageId::Tags);
+        let close_label = self.text(MessageId::Close);
+        let delete_label = self.text(MessageId::Delete).to_owned();
+        let row_border = cx.theme().border;
+        let row_bg = cx.theme().secondary;
+        let swatch_selected = cx.theme().primary;
+        let swatch_rest = cx.theme().border;
+        let none_bg = cx.theme().background;
+        let close_listener = cx.listener(|this, _, window, cx| {
+            this.owner
+                .update(cx, |app, cx| app.close_tag_manager(window, cx))
+                .ok();
+        });
+        let mut rows = div().flex().flex_col().gap(px(8.));
+        for entry in entries {
+            let id = entry.id;
+            let none_selected = entry.color.is_none();
+            let none_listener = cx.listener(move |this, _, window, cx| {
+                this.set_manager_tag_color(id, None, window, cx);
+            });
+            let mut swatches = h_flex().gap(px(6.)).items_center().child(
+                div()
+                    .id(SharedString::from(format!("tag-color-none-{}", id.0)))
+                    .size(px(16.))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(none_bg)
+                    .border_2()
+                    .border_color(if none_selected {
+                        swatch_selected
+                    } else {
+                        swatch_rest
+                    })
+                    .cursor_pointer()
+                    .on_click(none_listener),
+            );
+            for color in TagColor::ALL {
+                let selected = entry.color == Some(color);
+                let listener = cx.listener(move |this, _, window, cx| {
+                    this.set_manager_tag_color(id, Some(color), window, cx);
+                });
+                swatches = swatches.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "tag-color-{}-{}",
+                            color as u8, id.0
+                        )))
+                        .size(px(16.))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(rgb(tag_color_rgb(color)))
+                        .border_2()
+                        .border_color(if selected {
+                            swatch_selected
+                        } else {
+                            swatch_rest
+                        })
+                        .cursor_pointer()
+                        .on_click(listener),
+                );
+            }
+            let delete_listener = cx.listener(move |this, _, _, cx| {
+                this.owner
+                    .update(cx, |app, cx| app.request_tag_delete(id, cx))
+                    .ok();
+            });
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .p(px(10.))
+                    .rounded(px(8.))
+                    .border_1()
+                    .border_color(row_border)
+                    .bg(row_bg)
+                    .child(
+                        h_flex()
+                            .gap(px(8.))
+                            .items_center()
+                            .child(div().flex_1().child(Input::new(&entry.name)))
+                            .child(
+                                Button::new(SharedString::from(format!("delete-tag-{}", id.0)))
+                                    .label(delete_label.clone())
+                                    .icon(IconName::Delete)
+                                    .ghost()
+                                    .compact()
+                                    .on_click(delete_listener),
+                            ),
+                    )
+                    .child(swatches),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(div().font_weight(gpui::FontWeight::BOLD).child(heading))
+            .child(rows)
+            .child(
+                div().flex().justify_end().child(
+                    Button::new("close-tag-manager")
+                        .label(close_label)
+                        .on_click(close_listener),
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// Applies a swatch click: persists the color and refreshes the snapshot so
+    /// the selected swatch updates before the next AppView render.
+    fn set_manager_tag_color(
+        &mut self,
+        id: TagId,
+        color: Option<TagColor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.owner
+            .update(cx, |app, cx| app.set_tag_color(id, color, window, cx))
+            .ok();
+        if let DialogSnapshot::TagManager(entries) = &mut self.payload.snapshot
+            && let Some(entry) = entries.iter_mut().find(|entry| entry.id == id)
+        {
+            entry.color = color;
+        }
+        cx.notify();
     }
 
     fn render_modal(
@@ -724,7 +989,10 @@ impl Render for DialogPresenter {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.payload.snapshot {
             DialogSnapshot::Editor(editor) => self.render_editor(editor, cx),
-            DialogSnapshot::Confirm(action) => self.render_confirm(action, cx),
+            DialogSnapshot::Confirm { action, affected } => {
+                self.render_confirm(action, *affected, cx)
+            }
+            DialogSnapshot::TagManager(entries) => self.render_tag_manager(entries, cx),
             DialogSnapshot::Modal {
                 request,
                 secret_input,
@@ -753,6 +1021,11 @@ impl AppView {
         let locale = self.locale;
         if let Some(editor) = &self.editor {
             let save_state = editor_save_state(self.saving_editor, editor.id);
+            let tags: Vec<Tag> = self
+                .state
+                .as_ref()
+                .map(|state| state.tags().into_iter().cloned().collect())
+                .unwrap_or_default();
             return Some(DialogPayload {
                 identity: DialogIdentity {
                     locale,
@@ -776,16 +1049,39 @@ impl AppView {
                     username: editor.username.clone(),
                     private_key_path: editor.private_key_path.clone(),
                     secret: editor.secret.clone(),
+                    tags,
+                    tag_ids: editor.form.tag_ids.clone(),
+                    tag_name: editor.tag_name.clone(),
                 }),
             });
         }
         if let Some(action) = &self.confirm {
+            let affected = match action {
+                ConfirmAction::DeleteTag(id) => self
+                    .state
+                    .as_ref()
+                    .map(|state| state.profiles_with_tag(*id).len())
+                    .unwrap_or(0),
+                _ => 0,
+            };
             return Some(DialogPayload {
                 identity: DialogIdentity {
                     locale,
                     kind: DialogIdentityKind::Confirm(action.clone()),
                 },
-                snapshot: DialogSnapshot::Confirm(action.clone()),
+                snapshot: DialogSnapshot::Confirm {
+                    action: action.clone(),
+                    affected,
+                },
+            });
+        }
+        if let Some(manager) = &self.tag_manager {
+            return Some(DialogPayload {
+                identity: DialogIdentity {
+                    locale,
+                    kind: DialogIdentityKind::TagManager,
+                },
+                snapshot: DialogSnapshot::TagManager(manager.entries.clone()),
             });
         }
         let request = self.tabs.modals().current()?.clone();

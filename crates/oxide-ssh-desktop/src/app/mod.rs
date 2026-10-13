@@ -23,13 +23,14 @@ use gpui_component::{
 use oxide_ssh_core::{
     credentials::{CredentialError, CredentialStore},
     model::{
-        AuthConfig, ConnectionProfile, Endpoint, LocaleSetting, ProfileId, SessionId,
-        TerminalSize as CoreTerminalSize, ThemeSetting,
+        AuthConfig, ConnectionProfile, Endpoint, LocaleSetting, ProfileId, SessionId, Tag,
+        TagColor, TagId, TerminalSize as CoreTerminalSize, ThemeSetting,
     },
     session::{
         ConnectRequest, HostKeyDecision, SessionError, SessionEvent, SshService,
         private_key_requires_passphrase,
     },
+    storage::StorageError,
 };
 use oxide_ssh_terminal::{CellRenderStyle, CellSide, Key, KeyInput, TerminalSize};
 use secrecy::SecretString;
@@ -55,7 +56,7 @@ mod messages;
 
 use self::messages::{
     form_error_message_id, is_dark, local_error_message_id, session_error_message_id,
-    system_locale, transaction_error_message_id,
+    system_locale, tag_storage_error_message_id, transaction_error_message_id,
 };
 
 mod editor;
@@ -65,6 +66,10 @@ use self::editor::{ConnectionEditor, EditorId};
 mod dialog;
 
 use self::dialog::{ConfirmAction, DialogPresenter};
+
+mod tags;
+
+use self::tags::TagManager;
 
 mod session;
 
@@ -160,6 +165,21 @@ fn new_input(
     })
 }
 
+/// Muted, theme-agnostic hues for tag colors; mirrors the host-card avatar
+/// palette so tags sit comfortably on light and dark surfaces.
+fn tag_color_rgb(color: TagColor) -> u32 {
+    match color {
+        TagColor::Red => 0x00b5_7e7e,
+        TagColor::Orange => 0x00b5_936b,
+        TagColor::Yellow => 0x00b5_a86b,
+        TagColor::Green => 0x007b_a389,
+        TagColor::Blue => 0x006b_8cae,
+        TagColor::Purple => 0x009a_7bb5,
+        TagColor::Pink => 0x00b5_7ea0,
+        TagColor::Gray => 0x008a_9099,
+    }
+}
+
 pub struct AppView {
     root: PathBuf,
     state: Option<AppState>,
@@ -172,6 +192,7 @@ pub struct AppView {
     connect_secrets: HashMap<ProfileId, SecretString>,
     connecting_profiles: std::collections::HashSet<ProfileId>,
     editor: Option<ConnectionEditor>,
+    tag_manager: Option<TagManager>,
     confirm: Option<ConfirmAction>,
     saving_editor: Option<EditorId>,
     dialog_presenter: Option<Entity<DialogPresenter>>,
@@ -259,6 +280,7 @@ impl AppView {
             connect_secrets: HashMap::new(),
             connecting_profiles: std::collections::HashSet::new(),
             editor: None,
+            tag_manager: None,
             confirm: None,
             saving_editor: None,
             dialog_presenter: None,
@@ -349,10 +371,18 @@ impl AppView {
                         MessageId::Password
                     },
                 ),
+                (&editor.tag_name, MessageId::NewTag),
             ];
             for (entity, placeholder) in fields {
                 entity.update(cx, |field, cx| {
                     field.set_placeholder(Catalog::text(locale, placeholder), window, cx);
+                });
+            }
+        }
+        if let Some(manager) = &self.tag_manager {
+            for entry in &manager.entries {
+                entry.name.update(cx, |field, cx| {
+                    field.set_placeholder(Catalog::text(locale, MessageId::Name), window, cx);
                 });
             }
         }

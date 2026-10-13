@@ -160,6 +160,24 @@ impl AppView {
         state.set_search_query(query);
         let profiles: Vec<_> = state.filtered_profiles().into_iter().cloned().collect();
         let total_profiles = state.profiles().len();
+        let filter = state.tag_filter().clone();
+        let untagged_count = state
+            .profiles()
+            .iter()
+            .filter(|profile| profile.tag_ids.is_empty())
+            .count();
+        let tag_rows: Vec<(TagId, String, Option<TagColor>, usize)> = state
+            .tags()
+            .into_iter()
+            .map(|tag| {
+                let count = state
+                    .profiles()
+                    .iter()
+                    .filter(|profile| profile.tag_ids.contains(&tag.id))
+                    .count();
+                (tag.id, tag.name.clone(), tag.color, count)
+            })
+            .collect();
         let empty_message = if total_profiles == 0 {
             MessageId::NoConnections
         } else {
@@ -187,60 +205,179 @@ impl AppView {
                 .child(grid)
                 .into_any_element()
         };
-        // Groups are display-only for now (see CONTEXT.md): render them as a
-        // filter chip strip above the hosts grid instead of full-size cards.
-        let filter_chips = (total_profiles > 0).then(|| {
-            let theme = cx.theme();
-            h_flex().gap(px(8.)).child(
-                h_flex()
-                    .id("filter-all-hosts")
-                    .items_center()
-                    .gap(px(8.))
-                    .px(px(12.))
-                    .py(px(5.))
-                    .rounded_full()
-                    .bg(theme.secondary)
-                    .border_1()
-                    .border_color(theme.border)
+        // Tag sidebar: "All hosts" clears the filter, "Untagged" is an
+        // independent toggle, and each registry tag toggles into the OR union.
+        let sidebar_border = cx.theme().border;
+        let tags_label = self.text(MessageId::Tags);
+        let manage_label = self.text(MessageId::ManageTags);
+        let all_hosts_label = self.text(MessageId::AllHosts).to_owned();
+        let untagged_label = self.text(MessageId::Untagged).to_owned();
+        let mut list = div().flex().flex_col().gap(px(2.));
+        let all_row = self.tag_sidebar_row(
+            SharedString::from("filter-all-hosts"),
+            !filter.is_active(),
+            None,
+            all_hosts_label,
+            total_profiles,
+            cx,
+        );
+        list = list.child(all_row.on_click(cx.listener(|this, _, _, cx| {
+            if let Some(state) = &mut this.state {
+                state.clear_tag_filter();
+            }
+            cx.notify();
+        })));
+        let untagged_row = self.tag_sidebar_row(
+            SharedString::from("filter-untagged"),
+            filter.untagged,
+            None,
+            untagged_label,
+            untagged_count,
+            cx,
+        );
+        list = list.child(untagged_row.on_click(cx.listener(|this, _, _, cx| {
+            if let Some(state) = &mut this.state {
+                state.toggle_untagged_filter();
+            }
+            cx.notify();
+        })));
+        for (id, name, color, count) in tag_rows {
+            let row = self.tag_sidebar_row(
+                SharedString::from(format!("filter-tag-{}", id.0)),
+                filter.tags.contains(&id),
+                color.map(tag_color_rgb),
+                name,
+                count,
+                cx,
+            );
+            list = list.child(row.on_click(cx.listener(move |this, _, _, cx| {
+                if let Some(state) = &mut this.state {
+                    state.toggle_tag_filter(id);
+                }
+                cx.notify();
+            })));
+        }
+        let sidebar = div()
+            .id("tag-sidebar")
+            .w(px(200.))
+            .h_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap(px(6.))
+            .pr(px(14.))
+            .border_r_1()
+            .border_color(sidebar_border)
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(4.))
                     .text_sm()
-                    .child(self.text(MessageId::AllHosts))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.muted_foreground)
-                            .child(format!("{total_profiles}")),
-                    ),
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(tags_label),
             )
-        });
+            .child(list)
+            .child(div().flex_1())
+            .child(
+                Button::new("manage-tags")
+                    .label(manage_label)
+                    .ghost()
+                    .compact()
+                    .on_click(cx.listener(|this, _, window, cx| this.open_tag_manager(window, cx))),
+            );
         div()
             .size_full()
             .flex()
-            .flex_col()
             .gap(px(18.))
             .p(px(20.))
+            .child(sidebar)
             .child(
                 div()
+                    .flex_1()
+                    .min_w(px(0.))
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        Button::new("add-connection")
-                            .label(self.text(MessageId::NewHost))
-                            .icon(IconName::Plus)
-                            .primary()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.show_add_connection(window, cx)
-                            })),
-                    )
+                    .flex_col()
+                    .gap(px(18.))
                     .child(
                         div()
-                            .w(px(280.))
-                            .child(Input::new(&self.search).prefix(Icon::new(IconName::Search))),
-                    ),
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                Button::new("add-connection")
+                                    .label(self.text(MessageId::NewHost))
+                                    .icon(IconName::Plus)
+                                    .primary()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.show_add_connection(window, cx)
+                                    })),
+                            )
+                            .child(div().w(px(280.)).child(
+                                Input::new(&self.search).prefix(Icon::new(IconName::Search)),
+                            )),
+                    )
+                    .child(div().flex_1().child(content)),
             )
-            .children(filter_chips)
-            .child(div().flex_1().child(content))
             .into_any_element()
+    }
+
+    /// One sidebar filter row: optional color dot, label, and host count.
+    /// Selection styling mirrors the app navigation items.
+    fn tag_sidebar_row(
+        &self,
+        row_id: SharedString,
+        selected: bool,
+        dot: Option<u32>,
+        label: String,
+        count: usize,
+        cx: &App,
+    ) -> gpui::Stateful<gpui::Div> {
+        let theme = cx.theme();
+        let accent = theme.accent;
+        let accent_foreground = theme.accent_foreground;
+        let muted_foreground = theme.muted_foreground;
+        let hover_bg = theme.secondary;
+        let count_color = if selected {
+            accent_foreground
+        } else {
+            muted_foreground
+        };
+        let row = h_flex()
+            .id(row_id)
+            .items_center()
+            .gap(px(8.))
+            .px(px(10.))
+            .py(px(6.))
+            .rounded(px(8.))
+            .text_sm()
+            .cursor_pointer()
+            .child(match dot {
+                Some(color) => div()
+                    .size(px(8.))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(rgb(color))
+                    .into_any_element(),
+                None => div().size(px(8.)).flex_none().into_any_element(),
+            })
+            .child(
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(label),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(count_color)
+                    .child(format!("{count}")),
+            );
+        if selected {
+            row.bg(accent).text_color(accent_foreground)
+        } else {
+            row.hover(move |style| style.bg(hover_bg))
+        }
     }
 
     fn profile_status(&self, profile_id: ProfileId) -> Option<&'static str> {

@@ -35,6 +35,81 @@ impl Default for SessionId {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct TagId(pub Uuid);
+
+impl TagId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for TagId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Fixed palette of tag colors; rendered via theme variables in the UI.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TagColor {
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
+    Pink,
+    Gray,
+}
+
+impl TagColor {
+    pub const ALL: [TagColor; 8] = [
+        TagColor::Red,
+        TagColor::Orange,
+        TagColor::Yellow,
+        TagColor::Green,
+        TagColor::Blue,
+        TagColor::Purple,
+        TagColor::Pink,
+        TagColor::Gray,
+    ];
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tag {
+    pub id: TagId,
+    pub name: String,
+    pub color: Option<TagColor>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum TagValidationError {
+    #[error("tag name is invalid")]
+    Name,
+}
+
+impl Tag {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: TagId::new(),
+            name: name.into(),
+            color: None,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), TagValidationError> {
+        let name_len = self.name.trim().chars().count();
+        if !(1..=32).contains(&name_len) {
+            return Err(TagValidationError::Name);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct CredentialRef(pub String);
@@ -68,6 +143,8 @@ pub struct ConnectionProfile {
     pub endpoint: Endpoint,
     pub username: String,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub tag_ids: Vec<TagId>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -199,6 +276,7 @@ mod tests {
             },
             username: "oxide".into(),
             auth: AuthConfig::Agent,
+            tag_ids: Vec::new(),
         }
     }
 

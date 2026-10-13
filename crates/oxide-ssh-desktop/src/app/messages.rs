@@ -57,6 +57,14 @@ pub(super) fn transaction_error_message_id(error: &CredentialTransactionError) -
     }
 }
 
+pub(super) fn tag_storage_error_message_id(error: &StorageError) -> MessageId {
+    match error {
+        StorageError::DuplicateTagName { .. } => MessageId::TagExists,
+        StorageError::InvalidTag(_) => MessageId::InvalidTagName,
+        _ => MessageId::StorageCorrupt,
+    }
+}
+
 pub(super) fn form_error_message_id(error: FormError) -> MessageId {
     match error {
         FormError::Name => MessageId::Name,

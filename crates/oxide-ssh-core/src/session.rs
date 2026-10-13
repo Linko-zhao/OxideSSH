@@ -1499,6 +1499,7 @@ mod tests {
             },
             username: "oxide".into(),
             auth,
+            tag_ids: Vec::new(),
         }
     }
 

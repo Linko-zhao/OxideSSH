@@ -16,7 +16,7 @@ use thiserror::Error;
 
 use crate::model::{
     AppSettings, AuthConfig, ConnectionProfile, CredentialRef, Endpoint, ProfileId,
-    ProfileValidationError,
+    ProfileValidationError, Tag, TagId, TagValidationError,
 };
 
 pub const CONFIG_FILE_NAME: &str = "config.json";
@@ -29,6 +29,8 @@ pub struct AppConfig {
     schema_version: u32,
     pub settings: AppSettings,
     pub profiles: Vec<ConnectionProfile>,
+    #[serde(default)]
+    pub tags: Vec<Tag>,
 }
 
 impl Default for AppConfig {
@@ -37,6 +39,7 @@ impl Default for AppConfig {
             schema_version: SCHEMA_VERSION,
             settings: AppSettings::default(),
             profiles: Vec::new(),
+            tags: Vec::new(),
         }
     }
 }
@@ -115,12 +118,20 @@ pub enum StorageError {
     InvalidEndpoint,
     #[error("duplicate profile id {id:?}")]
     DuplicateProfile { id: ProfileId },
+    #[error("duplicate tag id {id:?}")]
+    DuplicateTag { id: TagId },
+    #[error("duplicate tag name {name:?}")]
+    DuplicateTagName { name: String },
+    #[error("profile {profile:?} references unknown tag {tag:?}")]
+    UnknownTagRef { profile: ProfileId, tag: TagId },
     #[error("invalid credential reference in profile {id:?}")]
     InvalidCredentialRef { id: ProfileId },
     #[error("host key changed while it was being accepted")]
     HostKeyConflict,
     #[error(transparent)]
     InvalidProfile(#[from] ProfileValidationError),
+    #[error(transparent)]
+    InvalidTag(#[from] TagValidationError),
 }
 
 pub struct AppStore {
@@ -156,7 +167,8 @@ impl AppStore {
 
     pub fn load_config(&self) -> Result<AppConfig, StorageError> {
         let _guard = self.config_lock.lock();
-        let config = read_versioned(&self.config_path(), AppConfig::default)?;
+        let mut config = read_versioned(&self.config_path(), AppConfig::default)?;
+        prune_dangling_tag_refs(&mut config);
         validate_config(&config)?;
         Ok(config)
     }
@@ -271,10 +283,31 @@ fn validate_config(config: &AppConfig) -> Result<(), StorageError> {
             found: u64::from(config.schema_version),
         });
     }
+    let mut tag_ids = HashSet::new();
+    let mut tag_names = HashSet::new();
+    for tag in &config.tags {
+        if !tag_ids.insert(tag.id) {
+            return Err(StorageError::DuplicateTag { id: tag.id });
+        }
+        tag.validate()?;
+        if !tag_names.insert(tag.name.trim().to_lowercase()) {
+            return Err(StorageError::DuplicateTagName {
+                name: tag.name.clone(),
+            });
+        }
+    }
     let mut seen = HashSet::new();
     for profile in &config.profiles {
         if !seen.insert(profile.id) {
             return Err(StorageError::DuplicateProfile { id: profile.id });
+        }
+        for tag_id in &profile.tag_ids {
+            if !tag_ids.contains(tag_id) {
+                return Err(StorageError::UnknownTagRef {
+                    profile: profile.id,
+                    tag: *tag_id,
+                });
+            }
         }
         profile.validate()?;
         match &profile.auth {
@@ -296,6 +329,15 @@ fn validate_config(config: &AppConfig) -> Result<(), StorageError> {
         }
     }
     Ok(())
+}
+
+/// Drops tag references that have no registry entry; used when loading
+/// configs written before the registry entry was removed externally.
+fn prune_dangling_tag_refs(config: &mut AppConfig) {
+    let valid: HashSet<TagId> = config.tags.iter().map(|tag| tag.id).collect();
+    for profile in &mut config.profiles {
+        profile.tag_ids.retain(|id| valid.contains(id));
+    }
 }
 
 #[derive(Deserialize)]
@@ -413,7 +455,8 @@ mod tests {
 
     use super::*;
     use crate::model::{
-        AuthConfig, ConnectionProfile, CredentialRef, LocaleSetting, ProfileId, ThemeSetting,
+        AuthConfig, ConnectionProfile, CredentialRef, LocaleSetting, ProfileId, Tag, TagId,
+        ThemeSetting,
     };
 
     fn profile(name: &str) -> ConnectionProfile {
@@ -429,6 +472,7 @@ mod tests {
             auth: AuthConfig::Password {
                 credential_ref: Some(CredentialRef::password(id)),
             },
+            tag_ids: Vec::new(),
         }
     }
 
@@ -462,6 +506,77 @@ mod tests {
             .map(|entry| entry.unwrap().file_name())
             .collect();
         assert_eq!(names, ["config.json"]);
+    }
+
+    #[test]
+    fn config_without_tags_field_loads_as_empty() {
+        let directory = tempdir().unwrap();
+        let profile = profile("legacy");
+        let mut config = AppConfig::default();
+        config.profiles.push(profile);
+        // Simulate a config written before the tags feature existed.
+        let text = serde_json::to_string(&config)
+            .unwrap()
+            .replace(",\"tagIds\":[]", "")
+            .replace(",\"tags\":[]", "");
+        assert!(!text.contains("tagIds") && !text.contains("\"tags\""));
+        fs::write(directory.path().join(CONFIG_FILE_NAME), &text).unwrap();
+
+        let store = AppStore::open(directory.path().to_path_buf()).unwrap();
+        let config = store.load_config().unwrap();
+        assert!(config.tags.is_empty());
+        assert_eq!(config.profiles.len(), 1);
+        assert!(config.profiles[0].tag_ids.is_empty());
+    }
+
+    #[test]
+    fn duplicate_tag_name_is_rejected_case_insensitively() {
+        let directory = tempdir().unwrap();
+        let store = AppStore::open(directory.path().to_path_buf()).unwrap();
+        let mut config = AppConfig::default();
+        config.tags.push(Tag::new("Prod"));
+        config.tags.push(Tag::new(" prod "));
+
+        assert!(matches!(
+            store.save_config(&config),
+            Err(StorageError::DuplicateTagName { .. })
+        ));
+    }
+
+    #[test]
+    fn unknown_tag_ref_is_rejected_on_save() {
+        let directory = tempdir().unwrap();
+        let store = AppStore::open(directory.path().to_path_buf()).unwrap();
+        let mut config = AppConfig::default();
+        let mut profile = profile("broken");
+        profile.tag_ids.push(TagId::new());
+        config.profiles.push(profile);
+
+        assert!(matches!(
+            store.save_config(&config),
+            Err(StorageError::UnknownTagRef { .. })
+        ));
+    }
+
+    #[test]
+    fn dangling_tag_refs_are_pruned_on_load() {
+        let directory = tempdir().unwrap();
+        let store = AppStore::open(directory.path().to_path_buf()).unwrap();
+        let tag = Tag::new("kept");
+        let mut config = AppConfig::default();
+        let mut profile = profile("mixed");
+        profile.tag_ids = vec![tag.id, TagId::new()];
+        config.tags.push(tag.clone());
+        config.profiles.push(profile);
+        // Bypass save-time validation to simulate an externally edited file.
+        fs::write(
+            directory.path().join(CONFIG_FILE_NAME),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = store.load_config().unwrap();
+        assert_eq!(loaded.profiles[0].tag_ids, vec![tag.id]);
     }
 
     #[test]

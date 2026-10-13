@@ -492,6 +492,16 @@ impl AppView {
                     self.status_message = Some(MessageId::StorageCorrupt);
                 }
             }
+            ConfirmAction::DeleteTag(id) => {
+                let result = self.state.as_mut().map(|state| state.delete_tag(id));
+                match result {
+                    Some(Ok(())) => self.handle_tag_deleted(id),
+                    Some(Err(error)) => {
+                        self.status_message = Some(tag_storage_error_message_id(&error))
+                    }
+                    None => {}
+                }
+            }
             ConfirmAction::Quit => {
                 self.quitting = true;
                 self.tabs.disconnect_all();

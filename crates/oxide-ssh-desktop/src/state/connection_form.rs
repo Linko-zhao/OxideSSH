@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 
 use oxide_ssh_core::model::{
-    AuthConfig, ConnectionProfile, Endpoint, ProfileId, ProfileValidationError,
+    AuthConfig, ConnectionProfile, Endpoint, ProfileId, ProfileValidationError, TagId,
 };
 use secrecy::SecretString;
 
@@ -25,6 +25,7 @@ pub struct ConnectionForm {
     pub private_key_path: PathBuf,
     pub secret: String,
     pub remember: bool,
+    pub tag_ids: Vec<TagId>,
     previous: Option<ConnectionProfile>,
     profile_id: ProfileId,
 }
@@ -40,6 +41,7 @@ impl ConnectionForm {
             private_key_path: PathBuf::new(),
             secret: String::new(),
             remember: false,
+            tag_ids: Vec::new(),
             previous: None,
             profile_id: ProfileId::new(),
         }
@@ -71,6 +73,7 @@ impl ConnectionForm {
             private_key_path,
             secret: String::new(),
             remember,
+            tag_ids: profile.tag_ids.clone(),
             profile_id: profile.id,
             previous: Some(profile),
         }
@@ -118,6 +121,7 @@ impl ConnectionForm {
             },
             username: self.username.trim().into(),
             auth,
+            tag_ids: self.tag_ids.clone(),
         };
         profile.validate().map_err(FormError::from)?;
 
