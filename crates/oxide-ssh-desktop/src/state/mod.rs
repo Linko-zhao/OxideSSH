@@ -35,7 +35,8 @@ pub struct AppState {
 
 /// Sidebar tag selection. Empty selection with `untagged == false` shows all
 /// profiles; otherwise a profile matches if any of its tags is selected, or
-/// it has no tags while `untagged` is selected.
+/// it has no tags while `untagged` is selected. `untagged` is mutually
+/// exclusive with tag selection: the toggle methods clear the other side.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TagFilter {
     pub tags: HashSet<TagId>,
@@ -153,11 +154,15 @@ impl AppState {
     pub fn toggle_tag_filter(&mut self, id: TagId) {
         if !self.tag_filter.tags.remove(&id) {
             self.tag_filter.tags.insert(id);
+            self.tag_filter.untagged = false;
         }
     }
 
     pub fn toggle_untagged_filter(&mut self) {
         self.tag_filter.untagged = !self.tag_filter.untagged;
+        if self.tag_filter.untagged {
+            self.tag_filter.tags.clear();
+        }
     }
 
     pub fn clear_tag_filter(&mut self) {
@@ -287,7 +292,7 @@ mod tests {
     }
 
     #[test]
-    fn tag_filter_is_union_and_intersects_with_search() {
+    fn untagged_filter_is_exclusive_with_tag_selection() {
         let directory = tempdir().unwrap();
         let store = AppStore::open(directory.path().to_path_buf()).unwrap();
         let mut config = store.load_config().unwrap();
@@ -322,14 +327,22 @@ mod tests {
         state.toggle_tag_filter(db.id);
         assert_eq!(state.filtered_profiles().len(), 2);
 
-        // Untagged selection adds Plain (union).
+        // Untagged clears the tag selection and shows only Plain.
         state.toggle_untagged_filter();
-        assert_eq!(state.filtered_profiles().len(), 3);
+        assert!(state.tag_filter().tags.is_empty());
+        assert_eq!(
+            state
+                .filtered_profiles()
+                .iter()
+                .map(|profile| profile.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Plain"]
+        );
 
-        // Untagged alone hides tagged profiles.
-        state.clear_tag_filter();
-        state.toggle_untagged_filter();
-        assert_eq!(state.filtered_profiles()[0].name, "Plain");
+        // Selecting a tag while untagged is active clears untagged.
+        state.toggle_tag_filter(prod.id);
+        assert!(!state.tag_filter().untagged);
+        assert_eq!(state.filtered_profiles().len(), 2);
 
         // Search intersects with the tag filter and matches tag names.
         state.clear_tag_filter();

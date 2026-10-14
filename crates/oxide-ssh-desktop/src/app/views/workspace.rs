@@ -205,8 +205,9 @@ impl AppView {
                 .child(grid)
                 .into_any_element()
         };
-        // Tag sidebar: "All hosts" clears the filter, "Untagged" is an
-        // independent toggle, and each registry tag toggles into the OR union.
+        // Tag sidebar: "All hosts" clears the filter (highlighted when no
+        // filter is active), "Untagged" and registry tags are mutually
+        // exclusive; registry tags toggle into an OR union among themselves.
         let sidebar_border = cx.theme().border;
         let tags_label = self.text(MessageId::Tags);
         let manage_label = self.text(MessageId::ManageTags);

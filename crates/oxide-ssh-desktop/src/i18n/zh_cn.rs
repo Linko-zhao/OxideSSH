@@ -10,7 +10,7 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::Workspace => "工作区",
         MessageId::AllHosts => "全部主机",
         MessageId::Tags => "标签",
-        MessageId::Untagged => "未分类",
+        MessageId::Untagged => "无标签",
         MessageId::ManageTags => "管理标签",
         MessageId::NewTag => "新标签名称",
         MessageId::Create => "新建",
