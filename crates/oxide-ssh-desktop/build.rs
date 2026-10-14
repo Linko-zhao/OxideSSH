@@ -26,5 +26,9 @@ fn main() {
     .expect("write oxide-ssh.rc");
 
     println!("cargo:rerun-if-changed={}", icon.display());
-    embed_resource::compile(&rc, embed_resource::NONE);
+    if let embed_resource::CompilationResult::Failed(reason) =
+        embed_resource::compile(&rc, embed_resource::NONE)
+    {
+        panic!("failed to compile Windows icon resource: {reason}");
+    }
 }
