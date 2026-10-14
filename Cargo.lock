@@ -4529,6 +4529,7 @@ dependencies = [
  "async-channel 2.5.0",
  "bytes",
  "directories",
+ "embed-resource",
  "gpui",
  "gpui-component",
  "gpui-component-assets",

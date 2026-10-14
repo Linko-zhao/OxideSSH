@@ -36,5 +36,8 @@ identifier = "io.github.linko-zhao.oxide-ssh"
 publisher = "Linko zhao"
 out-dir = "../../target/package"
 
+[build-dependencies]
+embed-resource = "3"
+
 [dev-dependencies]
 tempfile.workspace = true
