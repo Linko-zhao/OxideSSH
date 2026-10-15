@@ -5,6 +5,12 @@ use gpui_component::{Theme, ThemeColor, ThemeMode};
 use oxide_ssh_core::model::ThemeSetting;
 use oxide_ssh_terminal::{RgbColor, TerminalColors};
 
+/// Card layout scale: gap around floating cards, and inner padding of the
+/// terminal card. CARD_PADDING >= radius_lg so glyphs never reach the
+/// rounded corners.
+pub const CARD_GAP: f32 = 8.;
+pub const CARD_PADDING: f32 = 12.;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResolvedTheme {
     Light,

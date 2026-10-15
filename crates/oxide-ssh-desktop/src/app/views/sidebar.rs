@@ -75,9 +75,10 @@ impl AppView {
             .flex_col()
             .gap(px(10.))
             .p(px(12.))
-            .border_r_1()
+            .rounded(cx.theme().radius_lg)
+            .border_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .bg(cx.theme().secondary)
             .child(
                 div()
                     .px(px(10.))

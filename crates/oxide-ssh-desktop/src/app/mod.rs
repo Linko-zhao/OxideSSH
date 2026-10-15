@@ -45,7 +45,7 @@ use crate::{
     state::{
         AppLoadOutcome, AppState,
         connection_form::{AuthMethod, ConnectionForm, FormError},
-        theme::{ResolvedTheme, apply_theme},
+        theme::{CARD_GAP, CARD_PADDING, ResolvedTheme, apply_theme},
     },
 };
 use oxide_ssh_app::tabs::{
@@ -414,8 +414,10 @@ impl AppView {
 
     fn estimated_terminal_size(&self, window: &Window) -> TerminalSize {
         let bounds = window.bounds();
-        let width = (bounds.size.width - px(260.)).max(px(80.));
-        let height = (bounds.size.height - px(40.)).max(px(40.));
+        // Chrome: sidebar+strip estimate plus card gap and terminal padding.
+        let chrome = 2. * (CARD_GAP + CARD_PADDING);
+        let width = (bounds.size.width - px(260. + chrome)).max(px(80.));
+        let height = (bounds.size.height - px(40. + chrome)).max(px(40.));
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
         let cell_width = (font_size * 0.6).max(px(1.));
@@ -620,6 +622,8 @@ impl Render for AppView {
                     div()
                         .flex_1()
                         .flex()
+                        .gap(px(CARD_GAP))
+                        .p(px(CARD_GAP))
                         .when(sidebar_visible, |element| {
                             element.child(self.render_sidebar(cx))
                         })
