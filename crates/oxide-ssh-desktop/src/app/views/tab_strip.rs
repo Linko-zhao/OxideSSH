@@ -155,30 +155,28 @@ impl AppView {
                 theme.danger,
                 theme.danger_foreground,
             );
-            let caption = move |id: &'static str,
-                                icon: IconName,
-                                area: WindowControlArea,
-                                is_close: bool| {
-                div()
-                    .id(id)
-                    .window_control_area(area)
-                    .occlude()
-                    .flex_none()
-                    .flex()
-                    .w(px(34.))
-                    .h_full()
-                    .items_center()
-                    .justify_center()
-                    .text_color(fg)
-                    .hover(move |s| {
-                        if is_close {
-                            s.bg(danger).text_color(danger_fg)
-                        } else {
-                            s.bg(hover_bg)
-                        }
-                    })
-                    .child(Icon::new(icon).size(px(14.)))
-            };
+            let caption =
+                move |id: &'static str, icon: IconName, area: WindowControlArea, is_close: bool| {
+                    div()
+                        .id(id)
+                        .window_control_area(area)
+                        .occlude()
+                        .flex_none()
+                        .flex()
+                        .w(px(34.))
+                        .h_full()
+                        .items_center()
+                        .justify_center()
+                        .text_color(fg)
+                        .hover(move |s| {
+                            if is_close {
+                                s.bg(danger).text_color(danger_fg)
+                            } else {
+                                s.bg(hover_bg)
+                            }
+                        })
+                        .child(Icon::new(icon).size(px(14.)))
+                };
             let max_icon = if window.is_maximized() {
                 IconName::WindowRestore
             } else {
@@ -201,9 +199,19 @@ impl AppView {
                         .flex_1()
                         .h_full(),
                 )
-                .child(caption("win-min", IconName::WindowMinimize, WindowControlArea::Min, false))
+                .child(caption(
+                    "win-min",
+                    IconName::WindowMinimize,
+                    WindowControlArea::Min,
+                    false,
+                ))
                 .child(caption("win-max", max_icon, WindowControlArea::Max, false))
-                .child(caption("win-close", IconName::WindowClose, WindowControlArea::Close, true))
+                .child(caption(
+                    "win-close",
+                    IconName::WindowClose,
+                    WindowControlArea::Close,
+                    true,
+                ))
                 .into_any_element()
         }
     }
