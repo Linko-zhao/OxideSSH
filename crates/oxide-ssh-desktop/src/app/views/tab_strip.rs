@@ -137,10 +137,14 @@ impl AppView {
                 .into_any_element()
         }
         // macOS: the strip merges into the custom-drawn title bar; TitleBar
-        // renders the native window controls itself.
+        // renders the native window controls itself. The padding both matches
+        // the CARD_GAP margins around the content below and gives the traffic
+        // lights enough height to avoid clipping.
         #[cfg(target_os = "macos")]
         {
-            TitleBar::new().child(strip).into_any_element()
+            TitleBar::new()
+                .child(div().py(px(CARD_GAP)).child(strip))
+                .into_any_element()
         }
         // Windows: route caption interactions through gpui's native
         // WM_NCHITTEST path (`window_control_area`): the spacer reports
