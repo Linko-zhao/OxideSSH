@@ -214,7 +214,7 @@ fn home_dir() -> Option<String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
