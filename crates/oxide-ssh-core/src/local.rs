@@ -16,7 +16,10 @@ use portable_pty::{ChildKiller, CommandBuilder, ExitStatus, PtySize, native_pty_
 
 use crate::{
     model::{SessionId, TerminalSize},
-    session::{EVENT_QUEUE_CAPACITY, INPUT_QUEUE_CAPACITY, SendInputError, SessionError, SessionEvent, SessionState},
+    session::{
+        EVENT_QUEUE_CAPACITY, INPUT_QUEUE_CAPACITY, SendInputError, SessionError, SessionEvent,
+        SessionState,
+    },
 };
 
 /// Spawns the platform default shell on a local PTY.
@@ -110,11 +113,13 @@ pub fn spawn_local_shell(initial_size: TerminalSize) -> Result<LocalSessionHandl
     thread::Builder::new()
         .name("oxide-ssh-local-wait".into())
         .spawn(move || {
-            let status = child.wait().ok().map(|status: ExitStatus| status.exit_code());
+            let status = child
+                .wait()
+                .ok()
+                .map(|status: ExitStatus| status.exit_code());
             let _ = waiter_events.send_blocking(SessionEvent::Exited { status });
-            let _ = waiter_events.send_blocking(SessionEvent::StateChanged(
-                SessionState::Disconnected,
-            ));
+            let _ =
+                waiter_events.send_blocking(SessionEvent::StateChanged(SessionState::Disconnected));
         })
         .map_err(|_| SessionError::LocalShellFailed)?;
 
@@ -230,10 +235,7 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         // Wait for Connected, then drive the shell.
         loop {
-            match events
-                .recv_blocking()
-                .expect("event before deadline")
-            {
+            match events.recv_blocking().expect("event before deadline") {
                 SessionEvent::StateChanged(SessionState::Connected) => break,
                 _ => assert!(std::time::Instant::now() < deadline, "timed out"),
             }
@@ -243,18 +245,18 @@ mod tests {
             .expect("input");
         let mut saw_marker = false;
         let mut exit_status = None;
-        while std::time::Instant::now() < deadline {
-            match events.recv_blocking().expect("event") {
-                SessionEvent::Output(bytes) => {
+        while std::time::Instant::now() < deadline && (!saw_marker || exit_status.is_none()) {
+            match events.try_recv() {
+                Ok(SessionEvent::Output(bytes)) => {
                     if bytes.windows(15).any(|w| w == b"oxide-marker-42") {
                         saw_marker = true;
                     }
                 }
-                SessionEvent::Exited { status } => {
-                    exit_status = Some(status);
-                    break;
+                Ok(SessionEvent::Exited { status }) => exit_status = Some(status),
+                Ok(_) | Err(async_channel::TryRecvError::Empty) => {
+                    std::thread::yield_now();
                 }
-                _ => {}
+                Err(async_channel::TryRecvError::Closed) => break,
             }
         }
         assert!(saw_marker, "shell output never arrived");

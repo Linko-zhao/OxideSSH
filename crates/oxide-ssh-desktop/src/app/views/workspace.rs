@@ -394,12 +394,10 @@ impl AppView {
     }
 
     fn profile_status(&self, profile_id: ProfileId) -> Option<&'static str> {
-        let tab = self
-            .tabs
-            .tabs()
-            .iter()
-            .rev()
-            .find(|tab| tab.profile().is_some_and(|profile| profile.id == profile_id))?;
+        let tab = self.tabs.tabs().iter().rev().find(|tab| {
+            tab.profile()
+                .is_some_and(|profile| profile.id == profile_id)
+        })?;
         Some(self.text(tab_state_message_id(tab.state())))
     }
 }

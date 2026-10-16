@@ -433,10 +433,7 @@ impl AppView {
 
     pub(super) fn reconnect(&mut self, tab_id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         let is_local = self.tabs.tab(tab_id).is_some_and(|tab| tab.is_local());
-        let profile = self
-            .tabs
-            .tab(tab_id)
-            .and_then(|tab| tab.profile().cloned());
+        let profile = self.tabs.tab(tab_id).and_then(|tab| tab.profile().cloned());
         if self
             .tabs
             .prepare_reconnect(
