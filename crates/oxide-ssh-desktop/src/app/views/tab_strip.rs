@@ -27,7 +27,12 @@ impl AppView {
 
     /// Permanent top tab strip: the always-present Workspace pill comes
     /// first; each open connection follows as its own closable pill.
-    pub(in crate::app) fn render_tab_strip(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+    pub(in crate::app) fn render_tab_strip(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         let active = self.tabs.active();
         let tab_data: Vec<_> = self
             .tabs
@@ -78,10 +83,14 @@ impl AppView {
                             .child(SharedString::from(name.clone())),
                     )
                     .child(
+                        // xsmall (20px) keeps the pill inside the 34px title
+                        // bar; the default medium icon button is 32px and
+                        // pushes the pill to 42px with the vertical padding.
                         Button::new(SharedString::from(format!("close-{tab_id:?}")))
                             .icon(IconName::Close)
                             .ghost()
                             .compact()
+                            .xsmall()
                             .flex_none()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
@@ -100,6 +109,7 @@ impl AppView {
                 .icon(IconName::Plus)
                 .ghost()
                 .compact()
+                .xsmall()
                 .on_click(cx.listener(|this, _, window, cx| this.show_add_connection(window, cx))),
         );
         // Linux keeps the native title bar, so the strip stays a standalone row.
@@ -114,18 +124,86 @@ impl AppView {
                 .child(strip)
                 .into_any_element()
         }
-        // Windows/macOS: the strip merges into the custom-drawn title bar;
-        // TitleBar renders the window controls itself.
-        #[cfg(not(target_os = "linux"))]
+        // macOS: the strip merges into the custom-drawn title bar; TitleBar
+        // renders the native window controls itself.
+        #[cfg(target_os = "macos")]
         {
-            TitleBar::new()
+            TitleBar::new().child(strip).into_any_element()
+        }
+        // Windows: route caption interactions through gpui's native
+        // WM_NCHITTEST path (`window_control_area`): the spacer reports
+        // HTCAPTION (native move, drag-to-restore-when-maximized,
+        // double-click toggle, snap layouts) and the caption buttons report
+        // HTMINBUTTON/HTMAXBUTTON/HTCLOSE, with gpui's nc_button_pressed
+        // handling performing minimize / maximize-toggle / close. Close
+        // funnels through WM_CLOSE → `on_window_should_close`, keeping the
+        // quit confirmation. The event-driven alternatives are dead ends in
+        // gpui 0.2.2: `start_window_move()` is a no-op outside Wayland/X11
+        // and `zoom_window()` only ever maximizes (SW_MAXIMIZE).
+        //
+        // Every control hitbox MUST `occlude()`: the NC mouse down is also
+        // forwarded into the app, and the root view's focus-transfer
+        // listener would otherwise call `prevent_default()`, making gpui
+        // treat the click as app-handled and skip the native caption
+        // behavior entirely.
+        #[cfg(target_os = "windows")]
+        {
+            let theme = cx.theme();
+            let (fg, hover_bg, danger, danger_fg) = (
+                theme.foreground,
+                theme.secondary_hover,
+                theme.danger,
+                theme.danger_foreground,
+            );
+            let caption = move |id: &'static str,
+                                icon: IconName,
+                                area: WindowControlArea,
+                                is_close: bool| {
+                div()
+                    .id(id)
+                    .window_control_area(area)
+                    .occlude()
+                    .flex_none()
+                    .flex()
+                    .w(px(34.))
+                    .h_full()
+                    .items_center()
+                    .justify_center()
+                    .text_color(fg)
+                    .hover(move |s| {
+                        if is_close {
+                            s.bg(danger).text_color(danger_fg)
+                        } else {
+                            s.bg(hover_bg)
+                        }
+                    })
+                    .child(Icon::new(icon).size(px(14.)))
+            };
+            let max_icon = if window.is_maximized() {
+                IconName::WindowRestore
+            } else {
+                IconName::WindowMaximize
+            };
+            h_flex()
+                .w_full()
+                .h(px(34.))
+                .flex_none()
+                .items_center()
+                .pl(px(8.))
+                .border_b_1()
+                .border_color(theme.border)
+                .child(strip)
                 .child(
                     div()
-                        .text_sm()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(self.text(MessageId::AppName)),
+                        .id("titlebar-drag")
+                        .window_control_area(WindowControlArea::Drag)
+                        .occlude()
+                        .flex_1()
+                        .h_full(),
                 )
-                .child(strip)
+                .child(caption("win-min", IconName::WindowMinimize, WindowControlArea::Min, false))
+                .child(caption("win-max", max_icon, WindowControlArea::Max, false))
+                .child(caption("win-close", IconName::WindowClose, WindowControlArea::Close, true))
                 .into_any_element()
         }
     }

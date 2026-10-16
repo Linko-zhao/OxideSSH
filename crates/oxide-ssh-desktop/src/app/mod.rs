@@ -9,7 +9,7 @@ use gpui::{
     prelude::*, px, relative, rgb, size,
 };
 use gpui_component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, Root, WindowExt as _,
+    ActiveTheme as _, Disableable as _, Icon, IconName, Root, Sizable as _, WindowExt as _,
     alert::Alert,
     button::{Button, ButtonVariants as _},
     checkbox::Checkbox,
@@ -21,8 +21,12 @@ use gpui_component::{
     radio::{Radio, RadioGroup},
 };
 // The custom title bar only renders where the system title bar is transparent.
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
 use gpui_component::TitleBar;
+// Windows routes caption interactions through gpui's native WM_NCHITTEST
+// path; see render_tab_strip.
+#[cfg(target_os = "windows")]
+use gpui::WindowControlArea;
 use oxide_ssh_core::{
     credentials::{CredentialError, CredentialStore},
     model::{
@@ -636,7 +640,7 @@ impl Render for AppView {
                 .size_full()
                 .flex()
                 .flex_col()
-                .child(self.render_tab_strip(cx))
+                .child(self.render_tab_strip(window, cx))
                 .child(
                     div()
                         .flex_1()
