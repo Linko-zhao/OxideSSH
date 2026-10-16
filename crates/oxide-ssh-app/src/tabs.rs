@@ -3,6 +3,7 @@ use std::{collections::VecDeque, mem};
 use async_channel::Receiver;
 use bytes::Bytes;
 use oxide_ssh_core::{
+    local::LocalSessionHandle,
     model::{ConnectionProfile, Endpoint, SessionId},
     session::{
         HostKeyDecision, SendInputError, SessionError, SessionEvent, SessionHandle, SessionState,
@@ -60,12 +61,59 @@ pub enum TabNotification {
     LocalError(TabLocalError),
 }
 
+/// What a tab is connected to: a remote host over SSH, or a shell on the
+/// local machine.
+#[derive(Clone, Debug)]
+pub enum TabKind {
+    Ssh(ConnectionProfile),
+    Local,
+}
+
+impl TabKind {
+    pub fn profile(&self) -> Option<&ConnectionProfile> {
+        match self {
+            Self::Ssh(profile) => Some(profile),
+            Self::Local => None,
+        }
+    }
+}
+
+/// Live session backend. Both variants speak the same event/input/resize
+/// protocol; host-key decisions only exist for SSH.
+enum Session {
+    Ssh(SessionHandle),
+    Local(LocalSessionHandle),
+}
+
+impl Session {
+    fn try_send_input(&self, bytes: Bytes) -> Result<(), SendInputError> {
+        match self {
+            Self::Ssh(session) => session.try_send_input(bytes),
+            Self::Local(session) => session.try_send_input(bytes),
+        }
+    }
+
+    fn resize(&self, size: oxide_ssh_core::model::TerminalSize) {
+        match self {
+            Self::Ssh(session) => session.resize(size),
+            Self::Local(session) => session.resize(size),
+        }
+    }
+
+    fn disconnect(&self) {
+        match self {
+            Self::Ssh(session) => session.disconnect(),
+            Self::Local(session) => session.disconnect(),
+        }
+    }
+}
+
 pub struct Tab {
     id: TabId,
-    profile: ConnectionProfile,
+    kind: TabKind,
     state: TabState,
     terminal: TerminalModel,
-    session: Option<SessionHandle>,
+    session: Option<Session>,
     session_id: Option<SessionId>,
     closing: bool,
     local_error: Option<TabLocalError>,
@@ -73,14 +121,14 @@ pub struct Tab {
 
 impl Tab {
     fn new(
-        profile: ConnectionProfile,
+        kind: TabKind,
         size: TerminalSize,
         colors: TerminalColors,
         awaiting_secret: bool,
     ) -> Result<Self, TerminalError> {
         Ok(Self {
             id: TabId::new(),
-            profile,
+            kind,
             state: if awaiting_secret {
                 TabState::AwaitingSecret
             } else {
@@ -98,8 +146,16 @@ impl Tab {
         self.id
     }
 
-    pub fn profile(&self) -> &ConnectionProfile {
-        &self.profile
+    pub fn kind(&self) -> &TabKind {
+        &self.kind
+    }
+
+    pub fn profile(&self) -> Option<&ConnectionProfile> {
+        self.kind.profile()
+    }
+
+    pub fn is_local(&self) -> bool {
+        matches!(self.kind, TabKind::Local)
     }
 
     pub fn state(&self) -> &TabState {
@@ -137,7 +193,19 @@ impl Tab {
     pub fn attach_session(&mut self, mut session: SessionHandle) -> Option<Receiver<SessionEvent>> {
         let events = session.take_events()?;
         self.session_id = Some(session.id());
-        self.session = Some(session);
+        self.session = Some(Session::Ssh(session));
+        self.state = TabState::Connecting;
+        self.local_error = None;
+        Some(events)
+    }
+
+    pub fn attach_local(
+        &mut self,
+        mut session: LocalSessionHandle,
+    ) -> Option<Receiver<SessionEvent>> {
+        let events = session.take_events()?;
+        self.session_id = Some(session.id());
+        self.session = Some(Session::Local(session));
         self.state = TabState::Connecting;
         self.local_error = None;
         Some(events)
@@ -259,10 +327,10 @@ impl Tab {
         prompt_id: Uuid,
         decision: HostKeyDecision,
     ) -> Result<(), SessionError> {
-        self.session
-            .as_ref()
-            .ok_or(SessionError::Disconnected)?
-            .decide_host_key(prompt_id, decision)
+        match self.session.as_ref() {
+            Some(Session::Ssh(session)) => session.decide_host_key(prompt_id, decision),
+            _ => Err(SessionError::Disconnected),
+        }
     }
 
     pub fn disconnect(&self) {
@@ -491,7 +559,7 @@ impl TabCollection {
         colors: TerminalColors,
         awaiting_secret: bool,
     ) -> TabId {
-        let tab = Tab::new(profile, size, colors, awaiting_secret)
+        let tab = Tab::new(TabKind::Ssh(profile), size, colors, awaiting_secret)
             .expect("TabCollection requires a valid terminal size");
         let id = tab.id();
         self.tabs.push(tab);
@@ -499,6 +567,16 @@ impl TabCollection {
         if awaiting_secret {
             self.modals.push(ModalRequest::Secret { tab_id: id });
         }
+        id
+    }
+
+    /// Opens a local-shell tab: no profile, no secrets, no host keys.
+    pub fn open_local(&mut self, size: TerminalSize, colors: TerminalColors) -> TabId {
+        let tab = Tab::new(TabKind::Local, size, colors, false)
+            .expect("TabCollection requires a valid terminal size");
+        let id = tab.id();
+        self.tabs.push(tab);
+        self.active = Some(id);
         id
     }
 
@@ -940,6 +1018,28 @@ mod tests {
         assert!(queue.complete_current().is_some());
         // The waiter tab's duplicate modal was never queued.
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn local_tab_has_no_profile_and_disconnects_on_exit() {
+        let mut tabs = TabCollection::new();
+        let tab_id = tabs.open_local(size(), TerminalColors::default());
+
+        let tab = tabs.tab(tab_id).unwrap();
+        assert!(tab.is_local());
+        assert!(tab.profile().is_none());
+        assert_eq!(tab.state(), &TabState::Connecting);
+
+        tabs.apply_event(tab_id, SessionEvent::StateChanged(SessionState::Connected));
+        tabs.apply_event(tab_id, SessionEvent::Exited { status: Some(0) });
+        assert_eq!(
+            tabs.tab(tab_id).unwrap().state(),
+            &TabState::Disconnected {
+                reason: DisconnectReason::Exit(Some(0))
+            }
+        );
+        assert!(tabs.request_close(tab_id));
+        assert!(tabs.tab(tab_id).is_none());
     }
 
     #[test]

@@ -139,10 +139,14 @@ impl AppView {
         let Some(tab) = self.tabs.tab(tab_id) else {
             return;
         };
+        let Some(profile) = tab.profile() else {
+            // Local tabs never carry secrets; they use start_local_session.
+            return;
+        };
         if let AuthConfig::PrivateKey {
             path,
             passphrase_ref: None,
-        } = &tab.profile().auth
+        } = &profile.auth
             && secret.is_none()
         {
             // Preflight the key before any network activity so an encrypted
@@ -184,9 +188,12 @@ impl AppView {
         let Some(tab) = self.tabs.tab(tab_id) else {
             return;
         };
+        let Some(profile) = tab.profile().cloned() else {
+            return;
+        };
         let terminal_size = tab.terminal().size();
         let request = ConnectRequest {
-            profile: tab.profile().clone(),
+            profile,
             secret,
             initial_size: CoreTerminalSize {
                 columns: terminal_size.columns as u32,
@@ -211,57 +218,111 @@ impl AppView {
                     self.status_message = Some(MessageId::ConnectFailed);
                     return;
                 };
-                cx.spawn(async move |weak, cx| {
-                    let mut pending: Option<SessionEvent> = None;
-                    loop {
-                        let event = match pending.take() {
-                            Some(event) => event,
-                            None => match events.recv().await {
-                                Ok(event) => event,
-                                Err(_) => break,
-                            },
-                        };
-                        if let SessionEvent::Output(first) = &event {
-                            let mut total = first.len();
-                            let mut batch = vec![event];
-                            while total < OUTPUT_COALESCE_BYTES {
-                                match events.try_recv() {
-                                    Ok(SessionEvent::Output(bytes)) => {
-                                        total += bytes.len();
-                                        batch.push(SessionEvent::Output(bytes));
-                                    }
-                                    Ok(other) => {
-                                        pending = Some(other);
-                                        break;
-                                    }
-                                    Err(_) => break,
-                                }
-                            }
-                            if weak
-                                .update(cx, |this, cx| {
-                                    this.handle_output_batch(tab_id, session_id, batch, cx)
-                                })
-                                .is_err()
-                            {
-                                break;
-                            }
-                        } else if weak
-                            .update(cx, |this, cx| {
-                                this.handle_session_event(tab_id, session_id, event, cx)
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                })
-                .detach();
+                self.spawn_event_pump(tab_id, session_id, events, cx);
             }
             Err(error) => {
                 self.tabs.apply_event(tab_id, SessionEvent::Error(error));
                 self.status_message = Some(session_error_message_id(error));
             }
         }
+    }
+
+    /// Opens a local-shell tab and spawns the platform shell on a PTY.
+    pub(super) fn connect_local(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.main_view = MainView::Sessions;
+        let tab_id = self.tabs.open_local(
+            self.estimated_terminal_size(window),
+            self.theme.terminal_colors(),
+        );
+        self.start_local_session(tab_id, cx);
+        cx.notify();
+    }
+
+    fn start_local_session(&mut self, tab_id: TabId, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.tab(tab_id) else {
+            return;
+        };
+        let size = tab.terminal().size();
+        let result = oxide_ssh_core::local::spawn_local_shell(CoreTerminalSize {
+            columns: size.columns as u32,
+            rows: size.rows as u32,
+            pixel_width: size.pixel_width,
+            pixel_height: size.pixel_height,
+        });
+        match result {
+            Ok(session) => {
+                let session_id = session.id();
+                let Some(events) = self
+                    .tabs
+                    .tab_mut(tab_id)
+                    .and_then(|tab| tab.attach_local(session))
+                else {
+                    self.status_message = Some(MessageId::ConnectFailed);
+                    return;
+                };
+                self.spawn_event_pump(tab_id, session_id, events, cx);
+            }
+            Err(error) => {
+                self.tabs.apply_event(tab_id, SessionEvent::Error(error));
+                self.status_message = Some(session_error_message_id(error));
+            }
+        }
+    }
+
+    /// Pumps session events into the tab until the session ends or the view
+    /// goes away. Shared by SSH and local sessions: both speak SessionEvent.
+    fn spawn_event_pump(
+        &mut self,
+        tab_id: TabId,
+        session_id: SessionId,
+        events: async_channel::Receiver<SessionEvent>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |weak, cx| {
+            let mut pending: Option<SessionEvent> = None;
+            loop {
+                let event = match pending.take() {
+                    Some(event) => event,
+                    None => match events.recv().await {
+                        Ok(event) => event,
+                        Err(_) => break,
+                    },
+                };
+                if let SessionEvent::Output(first) = &event {
+                    let mut total = first.len();
+                    let mut batch = vec![event];
+                    while total < OUTPUT_COALESCE_BYTES {
+                        match events.try_recv() {
+                            Ok(SessionEvent::Output(bytes)) => {
+                                total += bytes.len();
+                                batch.push(SessionEvent::Output(bytes));
+                            }
+                            Ok(other) => {
+                                pending = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    if weak
+                        .update(cx, |this, cx| {
+                            this.handle_output_batch(tab_id, session_id, batch, cx)
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                } else if weak
+                    .update(cx, |this, cx| {
+                        this.handle_session_event(tab_id, session_id, event, cx)
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
     fn handle_output_batch(
@@ -348,7 +409,8 @@ impl AppView {
         ) {
             self.pending_terminal_focus = true;
             // Host-key acceptance is persisted by the time the session is up.
-            if let Some(state) = &mut self.state
+            if self.tabs.tab(tab_id).is_some_and(|tab| !tab.is_local())
+                && let Some(state) = &mut self.state
                 && state.reload_known_hosts().is_err()
             {
                 self.status_message = Some(MessageId::StorageCorrupt);
@@ -370,7 +432,11 @@ impl AppView {
     }
 
     pub(super) fn reconnect(&mut self, tab_id: TabId, window: &mut Window, cx: &mut Context<Self>) {
-        let profile = self.tabs.tab(tab_id).map(|tab| tab.profile().clone());
+        let is_local = self.tabs.tab(tab_id).is_some_and(|tab| tab.is_local());
+        let profile = self
+            .tabs
+            .tab(tab_id)
+            .and_then(|tab| tab.profile().cloned());
         if self
             .tabs
             .prepare_reconnect(
@@ -381,6 +447,12 @@ impl AppView {
             .is_err()
         {
             self.status_message = Some(MessageId::ConnectFailed);
+            return;
+        }
+        if is_local {
+            // Retry on a local tab simply respawns the shell.
+            self.start_local_session(tab_id, cx);
+            cx.notify();
             return;
         }
         let Some(profile) = profile else {

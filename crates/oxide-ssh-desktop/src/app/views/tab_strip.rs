@@ -33,7 +33,13 @@ impl AppView {
             .tabs
             .tabs()
             .iter()
-            .map(|tab| (tab.id(), tab.profile().name.clone(), *tab.state()))
+            .map(|tab| {
+                let title = match tab.kind() {
+                    TabKind::Ssh(profile) => profile.name.clone(),
+                    TabKind::Local => self.text(MessageId::LocalTerminal).to_string(),
+                };
+                (tab.id(), title, *tab.state())
+            })
             .collect();
         let theme = cx.theme();
         let dot = |state: &TabState| match state {

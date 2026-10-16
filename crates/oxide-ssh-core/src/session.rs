@@ -31,8 +31,8 @@ use crate::{
     storage::{AppStore, KnownHostEntry, StorageError, canonicalize_endpoint},
 };
 
-const INPUT_QUEUE_CAPACITY: usize = 128;
-const EVENT_QUEUE_CAPACITY: usize = 256;
+pub(crate) const INPUT_QUEUE_CAPACITY: usize = 128;
+pub(crate) const EVENT_QUEUE_CAPACITY: usize = 256;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const HOST_KEY_DECISION_TIMEOUT: Duration = Duration::from_secs(120);
 const DISCONNECT_GRACE: Duration = Duration::from_secs(2);
@@ -121,6 +121,8 @@ pub enum SessionError {
     PtyRejected,
     #[error("shell request rejected")]
     ShellRejected,
+    #[error("failed to start local shell")]
+    LocalShellFailed,
     #[error("session disconnected")]
     Disconnected,
 }

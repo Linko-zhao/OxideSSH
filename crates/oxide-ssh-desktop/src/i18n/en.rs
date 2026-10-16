@@ -21,6 +21,7 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::KnownHosts => "Known Hosts",
         MessageId::Logs => "Logs",
         MessageId::NewHost => "New Host",
+        MessageId::LocalTerminal => "Local Terminal",
         MessageId::Settings => "Settings",
         MessageId::Language => "Language",
         MessageId::Theme => "Theme",
@@ -101,5 +102,6 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::PtyRejected => "The server rejected the terminal request.",
         MessageId::SessionClosed => "The session input channel is closed.",
         MessageId::ShellRejected => "The server rejected the shell request.",
+        MessageId::LocalShellFailed => "Failed to start the local shell.",
     }
 }

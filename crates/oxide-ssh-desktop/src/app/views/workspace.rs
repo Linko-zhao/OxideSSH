@@ -305,13 +305,25 @@ impl AppView {
                             .items_center()
                             .justify_between()
                             .child(
-                                Button::new("add-connection")
-                                    .label(self.text(MessageId::NewHost))
-                                    .icon(IconName::Plus)
-                                    .primary()
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.show_add_connection(window, cx)
-                                    })),
+                                h_flex()
+                                    .gap(px(8.))
+                                    .child(
+                                        Button::new("add-connection")
+                                            .label(self.text(MessageId::NewHost))
+                                            .icon(IconName::Plus)
+                                            .primary()
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.show_add_connection(window, cx)
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("local-terminal")
+                                            .label(self.text(MessageId::LocalTerminal))
+                                            .icon(IconName::SquareTerminal)
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.connect_local(window, cx)
+                                            })),
+                                    ),
                             )
                             .child(div().w(px(280.)).child(
                                 Input::new(&self.search).prefix(Icon::new(IconName::Search)),
@@ -387,7 +399,7 @@ impl AppView {
             .tabs()
             .iter()
             .rev()
-            .find(|tab| tab.profile().id == profile_id)?;
+            .find(|tab| tab.profile().is_some_and(|profile| profile.id == profile_id))?;
         Some(self.text(tab_state_message_id(tab.state())))
     }
 }

@@ -49,7 +49,8 @@ use crate::{
     },
 };
 use oxide_ssh_app::tabs::{
-    DisconnectReason, ModalRequest, TabCollection, TabId, TabLocalError, TabNotification, TabState,
+    DisconnectReason, ModalRequest, TabCollection, TabId, TabKind, TabLocalError, TabNotification,
+    TabState,
 };
 
 mod messages;
@@ -83,6 +84,7 @@ actions!(
     oxide_ssh,
     [
         AddConnection,
+        LocalTerminal,
         OpenSettings,
         NextTab,
         PreviousTab,
@@ -119,6 +121,7 @@ pub fn init(cx: &mut App) {
     {
         bindings.extend([
             KeyBinding::new("cmd-n", AddConnection, None),
+            KeyBinding::new("cmd-shift-n", LocalTerminal, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-w", CloseTab, None),
             KeyBinding::new("cmd-c", Copy, None),
@@ -131,6 +134,7 @@ pub fn init(cx: &mut App) {
     {
         bindings.extend([
             KeyBinding::new("ctrl-n", AddConnection, None),
+            KeyBinding::new("ctrl-shift-n", LocalTerminal, None),
             KeyBinding::new("ctrl-,", OpenSettings, None),
             KeyBinding::new("ctrl-shift-w", CloseTab, None),
             KeyBinding::new("ctrl-shift-c", Copy, None),
@@ -520,6 +524,18 @@ impl AppView {
         cx.stop_propagation();
     }
 
+    fn on_local_terminal(
+        &mut self,
+        _: &LocalTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor.is_none() {
+            self.connect_local(window, cx);
+        }
+        cx.stop_propagation();
+    }
+
     fn on_open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
         self.main_view = MainView::Settings;
         cx.notify();
@@ -659,6 +675,7 @@ impl Render for AppView {
             .text_color(cx.theme().foreground)
             .font_family(".SystemUIFont")
             .on_action(cx.listener(Self::on_add_connection))
+            .on_action(cx.listener(Self::on_local_terminal))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_next_tab))
             .on_action(cx.listener(Self::on_previous_tab))

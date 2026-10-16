@@ -11,6 +11,7 @@ repository.workspace = true
 async-channel.workspace = true
 bytes.workspace = true
 parking_lot.workspace = true
+portable-pty.workspace = true
 russh.workspace = true
 secrecy.workspace = true
 serde.workspace = true

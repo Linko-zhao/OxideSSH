@@ -30,6 +30,7 @@ oxide-ssh-core = { path = "crates/oxide-ssh-core" }
 oxide-ssh-terminal = { path = "crates/oxide-ssh-terminal" }
 pageant = "=0.2.1"
 parking_lot = "0.12"
+portable-pty = "=0.9.0"
 russh = { version = "=0.62.5", default-features = false, features = ["ring", "rsa"] }
 rand = "0.10"
 secrecy = "0.10"

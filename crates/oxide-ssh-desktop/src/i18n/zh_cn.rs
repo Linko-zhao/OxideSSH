@@ -21,6 +21,7 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::KnownHosts => "已知主机",
         MessageId::Logs => "日志",
         MessageId::NewHost => "新建主机",
+        MessageId::LocalTerminal => "本机终端",
         MessageId::Settings => "设置",
         MessageId::Language => "语言",
         MessageId::Theme => "主题",
@@ -101,5 +102,6 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::PtyRejected => "服务器拒绝了终端请求。",
         MessageId::SessionClosed => "会话输入通道已关闭。",
         MessageId::ShellRejected => "服务器拒绝了 Shell 请求。",
+        MessageId::LocalShellFailed => "无法启动本机 Shell。",
     }
 }

@@ -24,6 +24,7 @@ pub enum MessageId {
     KnownHosts,
     Logs,
     NewHost,
+    LocalTerminal,
     Settings,
     Language,
     Theme,
@@ -104,6 +105,7 @@ pub enum MessageId {
     PtyRejected,
     SessionClosed,
     ShellRejected,
+    LocalShellFailed,
 }
 
 impl MessageId {
@@ -127,6 +129,7 @@ impl MessageId {
         Self::KnownHosts,
         Self::Logs,
         Self::NewHost,
+        Self::LocalTerminal,
         Self::Settings,
         Self::Language,
         Self::Theme,
@@ -207,6 +210,7 @@ impl MessageId {
         Self::PtyRejected,
         Self::SessionClosed,
         Self::ShellRejected,
+        Self::LocalShellFailed,
     ];
 }
 
