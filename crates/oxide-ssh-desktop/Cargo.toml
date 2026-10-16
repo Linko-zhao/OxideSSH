@@ -30,6 +30,14 @@ sys-locale.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 
+# macOS: sets the Dock icon at runtime so bare `cargo run`/`cargo build`
+# binaries show the app icon without an .app bundle. Versions match gpui's
+# transitive objc2 stack.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.4"
+objc2-app-kit = "=0.3.2"
+objc2-foundation = "=0.3.2"
+
 [package.metadata.packager]
 product-name = "OxideSSH"
 identifier = "io.github.linko-zhao.oxide-ssh"
