@@ -95,23 +95,38 @@ impl AppView {
                     })),
             );
         }
-        div()
-            .flex_none()
-            .px(px(8.))
-            .py(px(6.))
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .child(
-                strip.child(
-                    Button::new("new-tab")
-                        .icon(IconName::Plus)
-                        .ghost()
-                        .compact()
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.show_add_connection(window, cx)),
-                        ),
-                ),
-            )
-            .into_any_element()
+        let strip = strip.child(
+            Button::new("new-tab")
+                .icon(IconName::Plus)
+                .ghost()
+                .compact()
+                .on_click(cx.listener(|this, _, window, cx| this.show_add_connection(window, cx))),
+        );
+        // Linux keeps the native title bar, so the strip stays a standalone row.
+        #[cfg(target_os = "linux")]
+        {
+            div()
+                .flex_none()
+                .px(px(8.))
+                .py(px(6.))
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(strip)
+                .into_any_element()
+        }
+        // Windows/macOS: the strip merges into the custom-drawn title bar;
+        // TitleBar renders the window controls itself.
+        #[cfg(not(target_os = "linux"))]
+        {
+            TitleBar::new()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(self.text(MessageId::AppName)),
+                )
+                .child(strip)
+                .into_any_element()
+        }
     }
 }

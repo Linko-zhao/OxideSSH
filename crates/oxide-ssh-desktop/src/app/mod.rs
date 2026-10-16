@@ -20,6 +20,9 @@ use gpui_component::{
     list::ListItem,
     radio::{Radio, RadioGroup},
 };
+// The custom title bar only renders where the system title bar is transparent.
+#[cfg(not(target_os = "linux"))]
+use gpui_component::TitleBar;
 use oxide_ssh_core::{
     credentials::{CredentialError, CredentialStore},
     model::{
