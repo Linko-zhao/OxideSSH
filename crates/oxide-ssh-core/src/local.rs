@@ -218,6 +218,7 @@ fn home_dir() -> Option<String> {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     fn size() -> TerminalSize {
         TerminalSize {
             columns: 80,
