@@ -11,7 +11,11 @@ impl AppView {
             .items_center()
             .gap(px(8.))
             .px(px(12.))
-            .py(px(5.))
+            // py(3) keeps the pill compact; the title bar adds the
+            // client-wide CARD_GAP margin around it.
+            .py(px(3.))
+            .border_1()
+            .border_color(theme.border)
             .rounded(theme.radius)
             .text_sm()
             .cursor_pointer();
@@ -69,6 +73,14 @@ impl AppView {
                     cx.notify();
                 })),
         );
+        // Fixed separator between the permanent workspace pill and the
+        // session area (connection pills + new-tab button).
+        strip = strip.child(
+            div()
+                .text_color(theme.muted_foreground.opacity(0.6))
+                .text_sm()
+                .child("|"),
+        );
         for (id, name, state) in &tab_data {
             let tab_id = *id;
             let selected = self.main_view == MainView::Sessions && active == Some(tab_id);
@@ -83,9 +95,9 @@ impl AppView {
                             .child(SharedString::from(name.clone())),
                     )
                     .child(
-                        // xsmall (20px) keeps the pill inside the 34px title
-                        // bar; the default medium icon button is 32px and
-                        // pushes the pill to 42px with the vertical padding.
+                        // xsmall (20px) keeps the pill slim; the default
+                        // medium icon button is 32px and would inflate both
+                        // the pill and the title bar wrapping it.
                         Button::new(SharedString::from(format!("close-{tab_id:?}")))
                             .icon(IconName::Close)
                             .ghost()
@@ -117,8 +129,8 @@ impl AppView {
         {
             div()
                 .flex_none()
-                .px(px(8.))
-                .py(px(6.))
+                .px(px(CARD_GAP))
+                .py(px(CARD_GAP))
                 .border_b_1()
                 .border_color(cx.theme().border)
                 .child(strip)
@@ -184,10 +196,12 @@ impl AppView {
             };
             h_flex()
                 .w_full()
-                .h(px(34.))
+                // Height derives from the pill plus the client-wide CARD_GAP
+                // margin, so the tabs' top gap matches the content padding.
+                .py(px(CARD_GAP))
                 .flex_none()
                 .items_center()
-                .pl(px(8.))
+                .pl(px(CARD_GAP))
                 .border_b_1()
                 .border_color(theme.border)
                 .child(strip)
