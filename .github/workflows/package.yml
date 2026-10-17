@@ -64,8 +64,11 @@ jobs:
         run: cargo install cargo-packager --version ${{ env.CARGO_PACKAGER_VERSION }} --locked
 
       - name: Create unsigned packages
-        run: cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
-
+        run: |
+          mkdir -p target/package
+          cp target/${{ matrix.target }}/release/oxide-ssh* target/package/
+          cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+        shell: bash
       - name: Upload unsigned packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

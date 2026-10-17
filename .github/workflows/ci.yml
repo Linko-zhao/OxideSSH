@@ -67,8 +67,11 @@ jobs:
         run: cargo install cargo-packager --version ${{ env.CARGO_PACKAGER_VERSION }} --locked
 
       - name: Smoke-test unsigned package creation
-        run: cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
-
+        run: |
+          mkdir -p target/package
+          cp target/${{ matrix.target }}/release/oxide-ssh* target/package/
+          cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.formats }}
+        shell: bash
       - name: Install iOS target
         if: runner.os == 'macOS'
         run: rustup target add aarch64-apple-ios --toolchain ${{ env.RUST_TOOLCHAIN }}
