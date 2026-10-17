@@ -1,4 +1,4 @@
-[package]
+name = "oxide-ssh"
 product_name = "OxideSSH"
 version = "0.1.0"
 identifier = "io.github.linko-zhao.OxideSSH"
@@ -16,9 +16,12 @@ icons = [
 ]
 binaries = [{ path = "oxide-ssh", main = true }]
 out_dir = "target/package"
+# Config-file mode has no Cargo workspace context to auto-detect this;
+# release-only packaging (CI and local) builds into target/release.
+binaries_dir = "target/release"
 
-[package.macos]
+[macos]
 minimum_system_version = "14.0"
 
-[package.wix]
+[wix]
 languages = ["en-US"]

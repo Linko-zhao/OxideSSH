@@ -2,6 +2,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
   <title id="title">OxideSSH application icon</title>
   <desc id="desc">A rounded white square with a line-art terminal window showing a command prompt.</desc>
+  <!-- Artwork scaled to 824x824 within the 1024 canvas per Apple HIG, so the
+       Dock icon matches the optical size of standard macOS icons. -->
+  <g transform="translate(100 100) scale(0.858333)">
   <!-- rounded white background -->
   <rect x="32" y="32" width="960" height="960" rx="216" fill="#FFFFFF" stroke="#1B1D23" stroke-width="40"/>
   <!-- terminal window -->
@@ -16,4 +19,5 @@
   <path d="M264 496 L368 576 L264 656" fill="none" stroke="#1B1D23" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
   <!-- cursor underscore -->
   <path d="M440 664 H624" fill="none" stroke="#1B1D23" stroke-width="44" stroke-linecap="round"/>
+  </g>
 </svg>

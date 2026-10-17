@@ -8,18 +8,22 @@ use oxide_ssh_desktop::{
     app::{self, AppView},
     state::AppState,
 };
-/// Sets the Dock icon when running as a bare binary (cargo build/run). The
-/// packaged .app gets its icon from the bundle's icns instead; overriding it
-/// here with the same artwork is harmless.
+/// Sets the Dock icon only when running as a bare binary (cargo build/run).
+/// Inside a packaged .app the bundle's icns already supplies the Dock icon;
+/// overriding it with the PNG would bypass the bundle's sized icon set.
 #[cfg(target_os = "macos")]
 fn set_dock_icon() {
     use objc2::{AnyThread, MainThreadMarker};
     use objc2_app_kit::{NSApplication, NSImage};
-    use objc2_foundation::NSData;
+    use objc2_foundation::{NSBundle, NSData};
 
     let Some(mtm) = MainThreadMarker::new() else {
         return;
     };
+    // Packaged apps have a bundle identifier; bare binaries do not.
+    if NSBundle::mainBundle().bundleIdentifier().is_some() {
+        return;
+    }
     let png = include_bytes!("../../../assets/oxide-ssh.png");
     let data = NSData::from_vec(png.to_vec());
     let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {

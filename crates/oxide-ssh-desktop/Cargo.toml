@@ -38,12 +38,6 @@ objc2 = "=0.6.4"
 objc2-app-kit = "=0.3.2"
 objc2-foundation = "=0.3.2"
 
-[package.metadata.packager]
-product-name = "OxideSSH"
-identifier = "io.github.linko-zhao.oxide-ssh"
-publisher = "Linko zhao"
-out-dir = "../../target/package"
-
 [build-dependencies]
 embed-resource = "3"
 
