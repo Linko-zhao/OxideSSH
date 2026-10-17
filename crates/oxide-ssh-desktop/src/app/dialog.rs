@@ -986,7 +986,7 @@ impl DialogPresenter {
 }
 
 impl Render for DialogPresenter {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.payload.snapshot {
             DialogSnapshot::Editor(editor) => self.render_editor(editor, cx),
             DialogSnapshot::Confirm { action, affected } => {
@@ -998,9 +998,18 @@ impl Render for DialogPresenter {
                 secret_input,
             } => self.render_modal(request, secret_input, cx),
         };
+        // The dialog panel is capped at 80% of the viewport (see
+        // sync_dialog_layer); the library's own scroll region never engages
+        // because its inner container is unbounded. Bound the content here
+        // (minus the panel's 24px vertical paddings) so tall forms scroll
+        // instead of overflowing the window.
+        let max_content_h = window.viewport_size().height * 0.8 - px(48.);
         div()
             .id("oxide-ssh-dialog")
             .key_context("OxideSSHDialog")
+            .flex()
+            .flex_col()
+            .max_h(max_content_h)
             .track_focus(&self.focus.scope)
             .on_action(
                 cx.listener(|this, _: &DialogFocusNext, window, cx| this.on_focus_next(window, cx)),
@@ -1011,7 +1020,13 @@ impl Render for DialogPresenter {
             .on_action(cx.listener(|this, _: &DialogSubmit, window, cx| this.on_submit(window, cx)))
             .on_action(cx.listener(|this, _: &DialogCancel, window, cx| this.on_cancel(window, cx)))
             .child(div().track_focus(&self.focus.start))
-            .child(content)
+            .child(
+                div()
+                    .id("oxide-ssh-dialog-content")
+                    .flex_1()
+                    .overflow_y_scroll()
+                    .child(content),
+            )
             .child(div().track_focus(&self.focus.end))
     }
 }
@@ -1150,9 +1165,15 @@ impl AppView {
                 let presenter = cx.new(|cx| DialogPresenter::new(owner, payload, cx));
                 let presenter_entity = presenter.clone();
                 self.dialog_presenter = Some(presenter);
-                window.open_dialog(cx, move |dialog, _window, cx| {
+                window.open_dialog(cx, move |mut dialog, window, _cx| {
                     let presenter = presenter_entity.clone();
-                    let width = presenter.read(cx).dialog_width();
+                    let width = presenter.read(_cx).dialog_width();
+                    // The panel is top-anchored with natural height; without a
+                    // bound, tall content (editor, tag manager) overflows the
+                    // window. Cap at 80% so the built-in vertical scrollbar
+                    // engages and the panel stays fully visible.
+                    dialog.style().max_size.height =
+                        Some((window.viewport_size().height * 0.8).into());
                     dialog
                         .overlay_closable(false)
                         .keyboard(false)
