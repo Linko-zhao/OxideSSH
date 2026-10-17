@@ -513,7 +513,10 @@ impl AppView {
             return;
         }
         #[cfg(not(target_os = "linux"))]
+        // key.len() == 1 keeps named keys (enter, tab, …) on the explicit Key
+        // path: AppKit answers them with doCommandBySelector, never insertText.
         let plain_text = keystroke.key_char.is_some()
+            && keystroke.key.len() == 1
             && !keystroke.modifiers.control
             && !keystroke.modifiers.alt;
         #[cfg(not(target_os = "linux"))]
