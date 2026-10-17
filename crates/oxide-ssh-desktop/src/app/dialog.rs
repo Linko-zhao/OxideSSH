@@ -7,7 +7,10 @@ pub(super) enum ConfirmAction {
     DeleteProfile(ProfileId),
     DeleteHost(Endpoint),
     DeleteTag(TagId),
+    /// Window close: disconnects, then removes only this window.
     Quit,
+    /// Cmd+Q / dock Quit: disconnects, then terminates the process.
+    QuitApp,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -597,7 +600,9 @@ impl DialogPresenter {
             ConfirmAction::DeleteProfile(_) => (MessageId::ConfirmDeleteProfile, MessageId::Delete),
             ConfirmAction::DeleteHost(_) => (MessageId::ConfirmDeleteHost, MessageId::Delete),
             ConfirmAction::DeleteTag(_) => (MessageId::ConfirmDeleteTag, MessageId::Delete),
-            ConfirmAction::Quit => (MessageId::ConfirmQuit, MessageId::Quit),
+            ConfirmAction::Quit | ConfirmAction::QuitApp => {
+                (MessageId::ConfirmQuit, MessageId::Quit)
+            }
         };
         let affected_color = cx.theme().muted_foreground;
         let cancel_listener = cx.listener(|this, _, _, cx| {

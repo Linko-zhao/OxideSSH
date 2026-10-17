@@ -35,6 +35,7 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::Retry => "重试",
         MessageId::OpenConfigDirectory => "打开配置目录",
         MessageId::Quit => "退出",
+        MessageId::NewWindow => "新建窗口",
         MessageId::StorageCorrupt => "配置文件已损坏，原文件未被覆盖。",
         MessageId::NoTrustedHosts => "暂无受信任主机",
         MessageId::Close => "关闭",

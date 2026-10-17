@@ -576,6 +576,11 @@ impl AppView {
                 self.tabs.disconnect_all();
                 window.remove_window();
             }
+            ConfirmAction::QuitApp => {
+                self.quitting = true;
+                self.tabs.disconnect_all();
+                cx.quit();
+            }
         }
         cx.notify();
     }

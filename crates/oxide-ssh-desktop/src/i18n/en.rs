@@ -35,6 +35,7 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::Retry => "Retry",
         MessageId::OpenConfigDirectory => "Open configuration directory",
         MessageId::Quit => "Quit",
+        MessageId::NewWindow => "New Window",
         MessageId::StorageCorrupt => "A configuration file is corrupt and was not overwritten.",
         MessageId::NoTrustedHosts => "No trusted hosts",
         MessageId::Close => "Close",

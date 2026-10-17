@@ -104,6 +104,8 @@ actions!(
         DialogFocusPrev,
         DialogSubmit,
         DialogCancel,
+        QuitApp,
+        NewWindow,
     ]
 );
 
@@ -131,6 +133,7 @@ pub fn init(cx: &mut App) {
             KeyBinding::new("cmd-shift-n", LocalTerminal, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
             KeyBinding::new("cmd-w", CloseTab, None),
+            KeyBinding::new("cmd-q", QuitApp, None),
             KeyBinding::new("cmd-c", Copy, None),
             KeyBinding::new("cmd-v", Paste, None),
             KeyBinding::new("cmd-shift-[", PreviousTab, None),
@@ -273,6 +276,13 @@ impl AppView {
             ResolvedLocale::EnUs => "en",
             ResolvedLocale::ZhCn => "zh-CN",
         });
+        // shortcut: dock label snapshots the startup locale; a mid-session
+        // language switch only updates it after restart.
+        #[cfg(target_os = "macos")]
+        cx.set_dock_menu(vec![gpui::MenuItem::action(
+            Catalog::text(locale, MessageId::NewWindow),
+            NewWindow,
+        )]);
         let search = new_input(window, cx, MessageId::SearchConnections, "", false, locale);
         let secret = new_input(window, cx, MessageId::CredentialRequired, "", true, locale);
         let search_subscription = cx.observe(&search, |this, _, cx| {
@@ -323,6 +333,15 @@ impl AppView {
         if self.has_live_tabs() {
             self.confirm = Some(ConfirmAction::Quit);
             cx.notify();
+        }
+    }
+
+    fn on_quit_app(&mut self, _: &QuitApp, _: &mut Window, cx: &mut Context<Self>) {
+        if self.has_live_tabs() {
+            self.confirm = Some(ConfirmAction::QuitApp);
+            cx.notify();
+        } else {
+            cx.quit();
         }
     }
 
@@ -688,6 +707,7 @@ impl Render for AppView {
             .on_action(cx.listener(Self::on_next_tab))
             .on_action(cx.listener(Self::on_previous_tab))
             .on_action(cx.listener(Self::on_close_tab))
+            .on_action(cx.listener(Self::on_quit_app))
             .on_action(cx.listener(Self::on_copy))
             .on_action(cx.listener(Self::on_paste))
             .on_action(cx.listener(Self::on_terminal_tab))
