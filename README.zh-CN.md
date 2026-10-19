@@ -30,7 +30,7 @@ OxideSSH 是用 Rust 编写的桌面 SSH 客户端，采用原生 GPU 渲染界�
 ### 工作区与标签页
 - 可搜索的主机列表，支持彩色标签、多标签（OR）筛选、**无标签**筛选和**全部主机**视图。
 - 每条 SSH 连接与每个本地终端各占一个标签页；标签条显示连接状态，关闭仍有活动会话的标签页会请求确认。
-- **本地终端** — 在主目录中运行平台默认 shell（`$SHELL` 或 `/bin/sh`；`%COMSPEC%` 或 `cmd.exe`）的标签页。
+- **本地终端** — 在主目录中运行平台默认 shell（`$SHELL` 或 `/bin/sh`；Windows 按 PATH 探测 `pwsh.exe` → `powershell.exe`，回退 `%COMSPEC%`/`cmd.exe`）的标签页。
 
 ### 终端
 - 基于 Alacritty 的终端仿真，保留 10,000 行回滚历史。

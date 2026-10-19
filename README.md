@@ -30,7 +30,7 @@ OxideSSH is a desktop SSH client written in Rust with a native GPU-rendered UI (
 ### Workspace and tabs
 - Searchable host list with colored tags, multi-tag (OR) filtering, an **Untagged** filter, and an **All hosts** view.
 - Each SSH connection and each local terminal runs in its own tab; tab strip shows connection state, and closing a tab with a live session asks for confirmation.
-- **Local terminal** — a tab running the platform default shell (`$SHELL` or `/bin/sh`; `%COMSPEC%` or `cmd.exe`) in your home directory.
+- **Local terminal** — a tab running the platform default shell (`$SHELL` or `/bin/sh`; on Windows `pwsh.exe` → `powershell.exe` → `%COMSPEC%`/`cmd.exe`) in your home directory.
 
 ### Terminal
 - Alacritty-based terminal emulation with 10,000 lines of scrollback.

@@ -24,8 +24,9 @@ use crate::{
 
 /// Spawns the platform default shell on a local PTY.
 ///
-/// Shell selection: `$SHELL` (Unix) / `%COMSPEC%` (Windows), falling back to
-/// `/bin/sh` / `cmd.exe`. The shell starts in the user's home directory.
+/// Shell selection: `$SHELL` (Unix, falling back to `/bin/sh`); on Windows
+/// `pwsh.exe` → `powershell.exe` → `%COMSPEC%` → `cmd.exe`.
+/// The shell starts in the user's home directory.
 pub fn spawn_local_shell(initial_size: TerminalSize) -> Result<LocalSessionHandle, SessionError> {
     if !initial_size.is_valid() {
         return Err(SessionError::InvalidProfile);
@@ -199,8 +200,19 @@ fn default_shell() -> String {
     }
     #[cfg(windows)]
     {
+        let path = std::env::var_os("PATH");
+        for candidate in ["pwsh.exe", "powershell.exe"] {
+            if path_has_exe(path.as_deref(), candidate) {
+                return candidate.into();
+            }
+        }
         std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
     }
+}
+
+#[cfg(windows)]
+fn path_has_exe(path: Option<&std::ffi::OsStr>, exe: &str) -> bool {
+    path.is_some_and(|p| std::env::split_paths(p).any(|dir| dir.join(exe).is_file()))
 }
 
 fn home_dir() -> Option<String> {
@@ -211,6 +223,25 @@ fn home_dir() -> Option<String> {
     #[cfg(windows)]
     {
         std::env::var("USERPROFILE").ok()
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn path_has_exe_finds_file_only_in_listed_dirs() {
+        let dir = std::env::temp_dir().join(format!("oxide-path-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("pwsh.exe"), b"").unwrap();
+        let path = std::env::join_paths([&dir]).unwrap();
+
+        assert!(path_has_exe(Some(&path), "pwsh.exe"));
+        assert!(!path_has_exe(Some(&path), "powershell.exe"));
+        assert!(!path_has_exe(None, "pwsh.exe"));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 

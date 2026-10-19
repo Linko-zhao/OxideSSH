@@ -14,7 +14,7 @@ _Avoid_: 原生标题栏、系统标题栏
 ## Language
 
 **本地会话 (Local session)**:
-不关联主机的终端会话，在本机 PTY 中运行平台默认 shell（Unix 为 `$SHELL` 回退 `/bin/sh`，Windows 为 `%COMSPEC%` 回退 `cmd.exe`），工作目录为用户主目录。不持久化、不参与标签过滤，退出或关闭即销毁；重连语义为重新启动 shell。
+不关联主机的终端会话，在本机 PTY 中运行平台默认 shell（Unix 为 `$SHELL` 回退 `/bin/sh`；Windows 按 PATH 探测 `pwsh.exe` → `powershell.exe`，回退 `%COMSPEC%`/`cmd.exe`），工作目录为用户主目录。不持久化、不参与标签过滤，退出或关闭即销毁；重连语义为重新启动 shell。
 _Avoid_: 本地主机、本机主机
 
 **无标签主机 (Untagged host)**:
