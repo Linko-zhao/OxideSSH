@@ -161,6 +161,13 @@ enum MainView {
     Settings,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettingsCategory {
+    General,
+    Appearance,
+    Security,
+}
+
 fn new_input(
     window: &mut Window,
     cx: &mut Context<AppView>,
@@ -211,6 +218,7 @@ pub struct AppView {
     saving_editor: Option<EditorId>,
     dialog_presenter: Option<Entity<DialogPresenter>>,
     main_view: MainView,
+    settings_category: SettingsCategory,
     locale: ResolvedLocale,
     system_locale: Option<String>,
     theme: ResolvedTheme,
@@ -306,6 +314,7 @@ impl AppView {
             saving_editor: None,
             dialog_presenter: None,
             main_view: MainView::Workspace,
+            settings_category: SettingsCategory::General,
             locale,
             system_locale,
             theme,

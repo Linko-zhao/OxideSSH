@@ -626,6 +626,7 @@ impl AppView {
             return;
         }
         self.main_view = MainView::Settings;
+        self.settings_category = SettingsCategory::Security;
         cx.notify();
     }
 

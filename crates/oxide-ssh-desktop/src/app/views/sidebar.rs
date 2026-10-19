@@ -1,7 +1,7 @@
 use super::*;
 
 impl AppView {
-    fn nav_item(
+    pub(in crate::app) fn nav_item(
         &self,
         id: &'static str,
         icon: IconName,
