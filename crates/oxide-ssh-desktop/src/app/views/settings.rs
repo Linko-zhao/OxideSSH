@@ -54,7 +54,9 @@ impl AppView {
                         RadioGroup::horizontal("setting-locale")
                             .selected_index(Some(locale_index))
                             .child(Radio::new("locale-system").label(system_label.clone()))
-                            .child(Radio::new("locale-english").label(self.text(MessageId::English)))
+                            .child(
+                                Radio::new("locale-english").label(self.text(MessageId::English)),
+                            )
                             .child(
                                 Radio::new("locale-chinese")
                                     .label(self.text(MessageId::SimplifiedChinese)),
@@ -141,8 +143,9 @@ impl AppView {
                                 .compact()
                                 .on_click(move |_, _, cx| {
                                     delete_view.update(cx, |this, cx| {
-                                        this.confirm =
-                                            Some(ConfirmAction::DeleteHost(delete_endpoint.clone()));
+                                        this.confirm = Some(ConfirmAction::DeleteHost(
+                                            delete_endpoint.clone(),
+                                        ));
                                         cx.notify();
                                     });
                                 })
