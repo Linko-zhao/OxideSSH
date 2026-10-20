@@ -17,7 +17,6 @@ use gpui_component::{
     group_box::GroupBox,
     h_flex,
     input::{Input, InputState},
-    list::ListItem,
     radio::{Radio, RadioGroup},
 };
 // The custom title bar only renders where the system title bar is transparent.

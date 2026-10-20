@@ -1,15 +1,43 @@
 // Prevent an extra console window when launching on Windows.
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
+use std::borrow::Cow;
 use std::path::PathBuf;
 
 use directories::ProjectDirs;
-use gpui::{App, AppContext, Application, Bounds, WindowBounds, WindowOptions, px, size};
+use gpui::{
+    App, AppContext, Application, Bounds, SharedString, WindowBounds, WindowOptions, px, size,
+};
 use gpui_component::Root;
 use oxide_ssh_desktop::{
     app::{self, AppView, NewWindow},
     state::AppState,
 };
+
+// Serves the app's own icons (absent from gpui-component's set) and
+// delegates everything else to the gpui-component bundle.
+struct Assets;
+
+const TRASH_ICON: &str = "icons/trash-2.svg";
+
+impl gpui::AssetSource for Assets {
+    fn load(&self, path: &str) -> gpui::Result<Option<Cow<'static, [u8]>>> {
+        if path == TRASH_ICON {
+            return Ok(Some(Cow::Borrowed(
+                &include_bytes!("../../../assets/icons/trash-2.svg")[..],
+            )));
+        }
+        gpui_component_assets::Assets.load(path)
+    }
+
+    fn list(&self, path: &str) -> gpui::Result<Vec<SharedString>> {
+        let mut items = gpui_component_assets::Assets.list(path)?;
+        if TRASH_ICON.starts_with(path) {
+            items.push(TRASH_ICON.into());
+        }
+        Ok(items)
+    }
+}
 
 fn open_window(root: PathBuf, cx: &mut App) {
     let outcome = AppState::load(root.clone());
@@ -87,7 +115,7 @@ fn main() {
         .expect("OxideSSH requires a user configuration directory")
         .config_dir()
         .to_path_buf();
-    let app = Application::new().with_assets(gpui_component_assets::Assets);
+    let app = Application::new().with_assets(Assets);
     {
         let root = root.clone();
         app.on_reopen(move |cx| open_window_unless_exists(root.clone(), cx));

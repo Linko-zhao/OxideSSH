@@ -113,44 +113,49 @@ impl AppView {
                 }
                 for host in known_hosts {
                     let endpoint = host.endpoint();
-                    let summary = format!(
-                        "{}:{}  {}  {}  {}",
-                        host.host,
-                        host.port,
-                        host.algorithm,
-                        host.fingerprint_sha256,
-                        host.accepted_at_unix
-                    );
-                    let delete_label = self.text(MessageId::Delete).to_owned();
+                    let title = format!("{}:{}", host.host, host.port);
+                    let algorithm = host.algorithm.clone();
                     let view = cx.entity();
                     trusted = trusted.child(
-                        ListItem::new(SharedString::from(format!(
-                            "delete-host-{}-{}",
-                            endpoint.host, endpoint.port
-                        )))
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(summary),
-                        )
-                        .suffix(move |_, _| {
-                            let delete_view = view.clone();
-                            let delete_endpoint = endpoint.clone();
-                            Button::new("delete-host-action")
-                                .label(delete_label.clone())
-                                .ghost()
+                        h_flex()
+                            .w_full()
+                            .p(px(12.))
+                            .rounded(cx.theme().radius_lg)
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().secondary)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.))
+                                    .child(div().text_sm().child(title))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(algorithm),
+                                    ),
+                            )
+                            .child(
+                                Button::new(SharedString::from(format!(
+                                    "delete-host-{}-{}",
+                                    endpoint.host, endpoint.port
+                                )))
+                                .icon(gpui_component::Icon::empty().path("icons/trash-2.svg"))
+                                .danger()
                                 .compact()
                                 .on_click(move |_, _, cx| {
-                                    delete_view.update(cx, |this, cx| {
+                                    view.update(cx, |this, cx| {
                                         this.confirm = Some(ConfirmAction::DeleteHost(
-                                            delete_endpoint.clone(),
+                                            endpoint.clone(),
                                         ));
                                         cx.notify();
                                     });
-                                })
-                                .into_any_element()
-                        }),
+                                }),
+                            ),
                     );
                 }
                 GroupBox::new()
