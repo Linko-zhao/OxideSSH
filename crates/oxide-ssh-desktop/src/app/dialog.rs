@@ -83,7 +83,11 @@ enum DialogSnapshot {
         /// Profiles referencing a tag being deleted; shown in the body.
         affected: usize,
     },
-    TagManager(Vec<TagManagerEntry>),
+    TagManager {
+        entries: Vec<TagManagerEntry>,
+        /// The manager's inline "create tag" field.
+        new_tag: Entity<InputState>,
+    },
     Modal {
         request: ModalRequest,
         /// The shared one-time credential input; rendered by the presenter for
@@ -179,11 +183,12 @@ impl DialogPresenter {
                 });
                 return;
             }
-            DialogSnapshot::TagManager(entries) => {
-                if let Some(entry) = entries.first() {
-                    entry.name.update(cx, |input, cx| input.focus(window, cx));
-                    return;
+            DialogSnapshot::TagManager { entries, new_tag } => {
+                match entries.first() {
+                    Some(entry) => entry.name.update(cx, |input, cx| input.focus(window, cx)),
+                    None => new_tag.update(cx, |input, cx| input.focus(window, cx)),
                 }
+                return;
             }
             _ => {}
         }
@@ -228,7 +233,7 @@ impl DialogPresenter {
                     .update(cx, |app, cx| app.perform_confirm(window, cx))
                     .ok();
             }
-            DialogSnapshot::TagManager(_) => {
+            DialogSnapshot::TagManager { .. } => {
                 self.owner
                     .update(cx, |app, cx| app.commit_tag_names(window, cx))
                     .ok();
@@ -286,7 +291,7 @@ impl DialogPresenter {
             DialogSnapshot::Confirm { .. } => {
                 self.owner.update(cx, |app, cx| app.cancel_confirm(cx)).ok();
             }
-            DialogSnapshot::TagManager(_) => {
+            DialogSnapshot::TagManager { .. } => {
                 self.owner
                     .update(cx, |app, cx| app.close_tag_manager(window, cx))
                     .ok();
@@ -650,10 +655,12 @@ impl DialogPresenter {
     fn render_tag_manager(
         &self,
         entries: &[TagManagerEntry],
+        new_tag: &Entity<InputState>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let heading = self.text(MessageId::Tags);
         let close_label = self.text(MessageId::Close);
+        let create_label = self.text(MessageId::Create);
         let delete_label = self.text(MessageId::Delete).to_owned();
         let row_border = cx.theme().border;
         let row_bg = cx.theme().secondary;
@@ -665,9 +672,29 @@ impl DialogPresenter {
                 .update(cx, |app, cx| app.close_tag_manager(window, cx))
                 .ok();
         });
+        let create_listener = cx.listener(|this, _, window, cx| {
+            let created = this
+                .owner
+                .update(cx, |app, cx| app.create_tag_from_manager(window, cx))
+                .ok()
+                .flatten();
+            if let Some(entry) = created
+                && let DialogSnapshot::TagManager { entries, .. } = &mut this.payload.snapshot
+            {
+                entries.push(entry);
+                entries.sort_by(|left, right| {
+                    left.name
+                        .read(cx)
+                        .value()
+                        .to_lowercase()
+                        .cmp(&right.name.read(cx).value().to_lowercase())
+                });
+            }
+        });
         let mut rows = div().flex().flex_col().gap(px(8.));
         for entry in entries {
             let id = entry.id;
+            let expanded = entry.expanded;
             let none_selected = entry.color.is_none();
             let none_listener = cx.listener(move |this, _, window, cx| {
                 this.set_manager_tag_color(id, None, window, cx);
@@ -718,6 +745,20 @@ impl DialogPresenter {
                     .update(cx, |app, cx| app.request_tag_delete(id, cx))
                     .ok();
             });
+            let toggle_listener = cx.listener(move |this, _, _, cx| {
+                this.owner
+                    .update(cx, |app, cx| app.toggle_tag_expanded(id, cx))
+                    .ok();
+                if let DialogSnapshot::TagManager { entries, .. } = &mut this.payload.snapshot {
+                    for entry in entries.iter_mut() {
+                        entry.expanded = entry.id == id && !entry.expanded;
+                    }
+                }
+            });
+            let dot_bg = match entry.color {
+                Some(color) => rgb(tag_color_rgb(color)),
+                None => none_bg.into(),
+            };
             rows = rows.child(
                 div()
                     .flex()
@@ -732,6 +773,18 @@ impl DialogPresenter {
                         h_flex()
                             .gap(px(8.))
                             .items_center()
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("tag-dot-{}", id.0)))
+                                    .size(px(16.))
+                                    .flex_none()
+                                    .rounded_full()
+                                    .bg(dot_bg)
+                                    .border_2()
+                                    .border_color(swatch_rest)
+                                    .cursor_pointer()
+                                    .on_click(toggle_listener),
+                            )
                             .child(div().flex_1().child(Input::new(&entry.name)))
                             .child(
                                 Button::new(SharedString::from(format!("delete-tag-{}", id.0)))
@@ -742,7 +795,7 @@ impl DialogPresenter {
                                     .on_click(delete_listener),
                             ),
                     )
-                    .child(swatches),
+                    .when(expanded, |row| row.child(swatches)),
             );
         }
         div()
@@ -750,6 +803,17 @@ impl DialogPresenter {
             .flex_col()
             .gap(px(12.))
             .child(div().font_weight(gpui::FontWeight::BOLD).child(heading))
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(div().flex_1().child(Input::new(new_tag)))
+                    .child(
+                        Button::new("create-tag-from-manager")
+                            .label(create_label)
+                            .compact()
+                            .on_click(create_listener),
+                    ),
+            )
             .child(rows)
             .child(
                 div().flex().justify_end().child(
@@ -773,7 +837,7 @@ impl DialogPresenter {
         self.owner
             .update(cx, |app, cx| app.set_tag_color(id, color, window, cx))
             .ok();
-        if let DialogSnapshot::TagManager(entries) = &mut self.payload.snapshot
+        if let DialogSnapshot::TagManager { entries, .. } = &mut self.payload.snapshot
             && let Some(entry) = entries.iter_mut().find(|entry| entry.id == id)
         {
             entry.color = color;
@@ -997,7 +1061,9 @@ impl Render for DialogPresenter {
             DialogSnapshot::Confirm { action, affected } => {
                 self.render_confirm(action, *affected, cx)
             }
-            DialogSnapshot::TagManager(entries) => self.render_tag_manager(entries, cx),
+            DialogSnapshot::TagManager { entries, new_tag } => {
+                self.render_tag_manager(entries, new_tag, cx)
+            }
             DialogSnapshot::Modal {
                 request,
                 secret_input,
@@ -1101,7 +1167,10 @@ impl AppView {
                     locale,
                     kind: DialogIdentityKind::TagManager,
                 },
-                snapshot: DialogSnapshot::TagManager(manager.entries.clone()),
+                snapshot: DialogSnapshot::TagManager {
+                    entries: manager.entries.clone(),
+                    new_tag: manager.new_tag.clone(),
+                },
             });
         }
         let request = self.tabs.modals().current()?.clone();

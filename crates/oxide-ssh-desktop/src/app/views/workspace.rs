@@ -270,22 +270,30 @@ impl AppView {
             .border_r_1()
             .border_color(sidebar_border)
             .child(
-                div()
+                h_flex()
                     .px(px(10.))
                     .py(px(4.))
-                    .text_sm()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child(tags_label),
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .child(tags_label),
+                    )
+                    .child(
+                        Button::new("manage-tags")
+                            .icon(IconName::Settings2)
+                            .ghost()
+                            .compact()
+                            .xsmall()
+                            .tooltip(manage_label)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.open_tag_manager(window, cx)),
+                            ),
+                    ),
             )
-            .child(list)
-            .child(div().flex_1())
-            .child(
-                Button::new("manage-tags")
-                    .label(manage_label)
-                    .ghost()
-                    .compact()
-                    .on_click(cx.listener(|this, _, window, cx| this.open_tag_manager(window, cx))),
-            );
+            .child(list);
         div()
             .size_full()
             .flex()
