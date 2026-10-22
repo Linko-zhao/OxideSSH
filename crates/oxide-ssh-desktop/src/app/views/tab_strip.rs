@@ -122,7 +122,16 @@ impl AppView {
                 .ghost()
                 .compact()
                 .xsmall()
-                .on_click(cx.listener(|this, _, window, cx| this.show_add_connection(window, cx))),
+                .on_click(cx.listener(|this, _, window, cx| {
+                    let open_local = this.state.as_ref().is_some_and(|state| {
+                        state.settings().new_tab_action == NewTabAction::LocalTerminal
+                    });
+                    if open_local {
+                        this.connect_local(window, cx);
+                    } else {
+                        this.show_add_connection(window, cx);
+                    }
+                })),
         );
         // Linux keeps the native title bar, so the strip stays a standalone row.
         #[cfg(target_os = "linux")]

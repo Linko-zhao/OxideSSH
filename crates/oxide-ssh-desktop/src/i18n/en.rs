@@ -22,6 +22,7 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::Logs => "Logs",
         MessageId::NewHost => "New Host",
         MessageId::LocalTerminal => "Local Terminal",
+        MessageId::NewTabButton => "New tab button",
         MessageId::Settings => "Settings",
         MessageId::General => "General",
         MessageId::Appearance => "Appearance",

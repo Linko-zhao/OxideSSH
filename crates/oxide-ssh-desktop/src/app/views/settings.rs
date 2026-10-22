@@ -48,27 +48,61 @@ impl AppView {
                     LocaleSetting::EnUs => 1,
                     LocaleSetting::ZhCn => 2,
                 };
-                GroupBox::new()
-                    .title(self.text(MessageId::Language).to_owned())
+                let new_tab_action_index = match settings.new_tab_action {
+                    NewTabAction::AddConnection => 0,
+                    NewTabAction::LocalTerminal => 1,
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(CARD_GAP))
                     .child(
-                        RadioGroup::horizontal("setting-locale")
-                            .selected_index(Some(locale_index))
-                            .child(Radio::new("locale-system").label(system_label.clone()))
+                        GroupBox::new()
+                            .title(self.text(MessageId::Language).to_owned())
                             .child(
-                                Radio::new("locale-english").label(self.text(MessageId::English)),
-                            )
+                                RadioGroup::horizontal("setting-locale")
+                                    .selected_index(Some(locale_index))
+                                    .child(Radio::new("locale-system").label(system_label.clone()))
+                                    .child(
+                                        Radio::new("locale-english")
+                                            .label(self.text(MessageId::English)),
+                                    )
+                                    .child(
+                                        Radio::new("locale-chinese")
+                                            .label(self.text(MessageId::SimplifiedChinese)),
+                                    )
+                                    .on_click(cx.listener(|this, index, window, cx| {
+                                        let setting = match *index {
+                                            1 => LocaleSetting::EnUs,
+                                            2 => LocaleSetting::ZhCn,
+                                            _ => LocaleSetting::System,
+                                        };
+                                        this.set_locale(setting, window, cx);
+                                    })),
+                            ),
+                    )
+                    .child(
+                        GroupBox::new()
+                            .title(self.text(MessageId::NewTabButton).to_owned())
                             .child(
-                                Radio::new("locale-chinese")
-                                    .label(self.text(MessageId::SimplifiedChinese)),
-                            )
-                            .on_click(cx.listener(|this, index, window, cx| {
-                                let setting = match *index {
-                                    1 => LocaleSetting::EnUs,
-                                    2 => LocaleSetting::ZhCn,
-                                    _ => LocaleSetting::System,
-                                };
-                                this.set_locale(setting, window, cx);
-                            })),
+                                RadioGroup::horizontal("setting-new-tab-action")
+                                    .selected_index(Some(new_tab_action_index))
+                                    .child(
+                                        Radio::new("new-tab-add-connection")
+                                            .label(self.text(MessageId::AddConnection)),
+                                    )
+                                    .child(
+                                        Radio::new("new-tab-local-terminal")
+                                            .label(self.text(MessageId::LocalTerminal)),
+                                    )
+                                    .on_click(cx.listener(|this, index, _, cx| {
+                                        let setting = match *index {
+                                            1 => NewTabAction::LocalTerminal,
+                                            _ => NewTabAction::AddConnection,
+                                        };
+                                        this.set_new_tab_action(setting, cx);
+                                    })),
+                            ),
                     )
                     .into_any_element()
             }

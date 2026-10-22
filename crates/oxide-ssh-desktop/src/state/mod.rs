@@ -4,7 +4,8 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use oxide_ssh_core::{
     model::{
-        AppSettings, ConnectionProfile, Endpoint, LocaleSetting, Tag, TagColor, TagId, ThemeSetting,
+        AppSettings, ConnectionProfile, Endpoint, LocaleSetting, NewTabAction, Tag, TagColor,
+        TagId, ThemeSetting,
     },
     storage::{AppConfig, AppStore, KnownHostEntry, KnownHosts, StorageError},
 };
@@ -233,6 +234,14 @@ impl AppState {
     pub fn set_theme(&mut self, theme: ThemeSetting) -> Result<(), StorageError> {
         let mut config = self.config.clone();
         config.settings.theme = theme;
+        self.store.save_config(&config)?;
+        self.config = config;
+        Ok(())
+    }
+
+    pub fn set_new_tab_action(&mut self, action: NewTabAction) -> Result<(), StorageError> {
+        let mut config = self.config.clone();
+        config.settings.new_tab_action = action;
         self.store.save_config(&config)?;
         self.config = config;
         Ok(())

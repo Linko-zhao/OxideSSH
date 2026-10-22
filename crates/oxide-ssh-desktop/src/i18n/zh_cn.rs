@@ -22,6 +22,7 @@ pub(super) fn text(id: MessageId) -> &'static str {
         MessageId::Logs => "日志",
         MessageId::NewHost => "新建主机",
         MessageId::LocalTerminal => "本机终端",
+        MessageId::NewTabButton => "新建标签按钮",
         MessageId::Settings => "设置",
         MessageId::General => "通用",
         MessageId::Appearance => "外观",

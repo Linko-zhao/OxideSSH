@@ -29,8 +29,8 @@ use gpui::WindowControlArea;
 use oxide_ssh_core::{
     credentials::{CredentialError, CredentialStore},
     model::{
-        AuthConfig, ConnectionProfile, Endpoint, LocaleSetting, ProfileId, SessionId, Tag,
-        TagColor, TagId, TerminalSize as CoreTerminalSize, ThemeSetting,
+        AuthConfig, ConnectionProfile, Endpoint, LocaleSetting, NewTabAction, ProfileId,
+        SessionId, Tag, TagColor, TagId, TerminalSize as CoreTerminalSize, ThemeSetting,
     },
     session::{
         ConnectRequest, HostKeyDecision, SessionError, SessionEvent, SshService,
@@ -447,6 +447,17 @@ impl AppView {
             self.status_message = Some(MessageId::StorageCorrupt);
         }
         self.refresh_preferences(window, cx);
+        cx.notify();
+    }
+
+    fn set_new_tab_action(&mut self, setting: NewTabAction, cx: &mut Context<Self>) {
+        if self
+            .state
+            .as_mut()
+            .is_some_and(|state| state.set_new_tab_action(setting).is_err())
+        {
+            self.status_message = Some(MessageId::StorageCorrupt);
+        }
         cx.notify();
     }
 

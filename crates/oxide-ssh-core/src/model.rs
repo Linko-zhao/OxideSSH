@@ -255,11 +255,23 @@ pub enum ThemeSetting {
     Dark,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NewTabAction {
+    #[default]
+    AddConnection,
+    LocalTerminal,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default)]
     pub locale: LocaleSetting,
+    #[serde(default)]
     pub theme: ThemeSetting,
+    #[serde(default)]
+    pub new_tab_action: NewTabAction,
 }
 
 #[cfg(test)]
@@ -319,6 +331,16 @@ mod tests {
         let mut profile = valid_profile();
         profile.endpoint.host = "a".repeat(254);
         assert_eq!(profile.validate(), Err(ProfileValidationError::Host));
+    }
+
+    #[test]
+    fn settings_without_new_tab_action_defaults_to_add_connection() {
+        // config.json written before newTabAction existed must still load,
+        // otherwise the app falls into the read-only Recovery UI.
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"locale":"zh-CN","theme":"dark"}"#).unwrap();
+        assert_eq!(settings.new_tab_action, NewTabAction::AddConnection);
+        assert_eq!(settings.theme, ThemeSetting::Dark);
     }
 
     #[test]
