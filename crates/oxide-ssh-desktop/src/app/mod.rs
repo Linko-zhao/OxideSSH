@@ -29,8 +29,8 @@ use gpui::WindowControlArea;
 use oxide_ssh_core::{
     credentials::{CredentialError, CredentialStore},
     model::{
-        AuthConfig, ConnectionProfile, Endpoint, LocaleSetting, NewTabAction, ProfileId,
-        SessionId, Tag, TagColor, TagId, TerminalSize as CoreTerminalSize, ThemeSetting,
+        AuthConfig, ConnectionProfile, Endpoint, LocaleSetting, NewTabAction, ProfileId, SessionId,
+        Tag, TagColor, TagId, TerminalSize as CoreTerminalSize, ThemeSetting,
     },
     session::{
         ConnectRequest, HostKeyDecision, SessionError, SessionEvent, SshService,

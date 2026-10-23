@@ -183,9 +183,8 @@ impl AppView {
                                 .compact()
                                 .on_click(move |_, _, cx| {
                                     view.update(cx, |this, cx| {
-                                        this.confirm = Some(ConfirmAction::DeleteHost(
-                                            endpoint.clone(),
-                                        ));
+                                        this.confirm =
+                                            Some(ConfirmAction::DeleteHost(endpoint.clone()));
                                         cx.notify();
                                     });
                                 }),

@@ -171,15 +171,13 @@ impl AppView {
         };
         if let Some(manager) = self.tag_manager.as_mut() {
             manager.entries.push(entry.clone());
-            manager
-                .entries
-                .sort_by(|left, right| {
-                    left.name
-                        .read(cx)
-                        .value()
-                        .to_lowercase()
-                        .cmp(&right.name.read(cx).value().to_lowercase())
-                });
+            manager.entries.sort_by(|left, right| {
+                left.name
+                    .read(cx)
+                    .value()
+                    .to_lowercase()
+                    .cmp(&right.name.read(cx).value().to_lowercase())
+            });
             manager._subscriptions.push(subscription);
             manager
                 .new_tag

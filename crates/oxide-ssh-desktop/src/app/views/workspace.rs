@@ -258,42 +258,43 @@ impl AppView {
                 cx.notify();
             })));
         }
-        let sidebar = div()
-            .id("tag-sidebar")
-            .w(px(200.))
-            .h_full()
-            .flex_none()
-            .flex()
-            .flex_col()
-            .gap(px(6.))
-            .pr(px(14.))
-            .border_r_1()
-            .border_color(sidebar_border)
-            .child(
-                h_flex()
-                    .px(px(10.))
-                    .py(px(4.))
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(tags_label),
-                    )
-                    .child(
-                        Button::new("manage-tags")
-                            .icon(IconName::Settings2)
-                            .ghost()
-                            .compact()
-                            .xsmall()
-                            .tooltip(manage_label)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.open_tag_manager(window, cx)),
-                            ),
-                    ),
-            )
-            .child(list);
+        let sidebar =
+            div()
+                .id("tag-sidebar")
+                .w(px(200.))
+                .h_full()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .pr(px(14.))
+                .border_r_1()
+                .border_color(sidebar_border)
+                .child(
+                    h_flex()
+                        .px(px(10.))
+                        .py(px(4.))
+                        .items_center()
+                        .justify_between()
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .child(tags_label),
+                        )
+                        .child(
+                            Button::new("manage-tags")
+                                .icon(IconName::Settings2)
+                                .ghost()
+                                .compact()
+                                .xsmall()
+                                .tooltip(manage_label)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_tag_manager(window, cx)
+                                })),
+                        ),
+                )
+                .child(list);
         div()
             .size_full()
             .flex()
